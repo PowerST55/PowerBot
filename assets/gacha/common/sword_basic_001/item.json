@@ -1,0 +1,21 @@
+{
+  "item_key": "sword_basic_001",
+  "nombre": "Espada Básica",
+  "descripcion": "Una espada de hierro forjada para principiantes. Arma confiable para aventureros novatos.",
+  "rareza": "common",
+  "stats": {
+    "ataque": 10,
+    "defensa": 2,
+    "vida": 0,
+    "armadura": 0,
+    "mantenimiento": 5
+  },
+  "metadata": {
+    "categoria": "weapon",
+    "tipo": "sword",
+    "peso": 5,
+    "vendible": true,
+    "tradeable": true,
+    "stackable": false
+  }
+}

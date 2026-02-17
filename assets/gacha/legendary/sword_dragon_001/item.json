@@ -1,0 +1,22 @@
+{
+  "item_key": "sword_dragon_001",
+  "nombre": "Nombre del Item",
+  "descripcion": "Descripción detallada del item",
+  "rareza": "legendary",
+  "stats": {
+    "ataque": 0,
+    "defensa": 0,
+    "vida": 0,
+    "armadura": 0,
+    "mantenimiento": 0
+  },
+  "metadata": {
+    "categoria": "weapon",
+    "tipo": "sword",
+    "peso": 1,
+    "precio_tienda": null,
+    "vendible": true,
+    "tradeable": true,
+    "stackable": false
+  }
+}

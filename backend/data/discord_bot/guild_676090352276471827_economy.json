@@ -5,7 +5,7 @@
   },
   "points": {
     "amount": 5,
-    "interval": 10
+    "interval": 300
   },
   "earning_channels": [
     1029761977477763184,

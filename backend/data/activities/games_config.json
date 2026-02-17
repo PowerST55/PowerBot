@@ -1,0 +1,10 @@
+{
+  "gamble": {
+    "limit": 150.0,
+    "cooldown": 0
+  },
+  "slots": {
+    "limit": 300.0,
+    "cooldown": 0
+  }
+}

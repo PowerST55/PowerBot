@@ -381,6 +381,173 @@ def get_user_balance_smart(identifier: str, platform: Optional[str] = None) -> O
 
 
 
+def transfer_points(
+	from_user_id: int,
+	to_user_id: int,
+	amount: int,
+	guild_id: Optional[str] = None,
+	platform: str = "discord"
+) -> Dict[str, any]:
+	"""
+	Transfiere puntos de un usuario a otro de forma atómica.
+	
+	Args:
+		from_user_id: ID del usuario que envía puntos
+		to_user_id: ID del usuario que recibe puntos
+		amount: Cantidad de puntos a transferir (debe ser positiva)
+		guild_id: ID del servidor donde se realiza la transferencia
+		platform: Plataforma donde se realiza ("discord", "youtube", etc.)
+		
+	Returns:
+		Dict con:
+			- success: True si la transferencia fue exitosa
+			- error: Mensaje de error si falló
+			- from_balance: Balance final del remitente
+			- to_balance: Balance final del destinatario
+			
+	Example:
+		>>> result = transfer_points(42, 83, 100, guild_id="123456789")
+		>>> if result["success"]:
+		...     print(f"Transferencia exitosa. Balance final: {result['from_balance']}")
+	"""
+	if amount <= 0:
+		return {
+			"success": False,
+			"error": "La cantidad debe ser positiva",
+			"from_balance": None,
+			"to_balance": None
+		}
+	
+	if from_user_id == to_user_id:
+		return {
+			"success": False,
+			"error": "No puedes transferir puntos a ti mismo",
+			"from_balance": None,
+			"to_balance": None
+		}
+	
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		now_iso = datetime.utcnow().isoformat()
+		
+		conn.execute("BEGIN IMMEDIATE")
+		
+		# Verificar que ambos usuarios existen
+		from_user = conn.execute(
+			"SELECT user_id FROM users WHERE user_id = ?",
+			(from_user_id,)
+		).fetchone()
+		
+		to_user = conn.execute(
+			"SELECT user_id FROM users WHERE user_id = ?",
+			(to_user_id,)
+		).fetchone()
+		
+		if not from_user:
+			conn.rollback()
+			return {
+				"success": False,
+				"error": "El usuario remitente no existe",
+				"from_balance": None,
+				"to_balance": None
+			}
+		
+		if not to_user:
+			conn.rollback()
+			return {
+				"success": False,
+				"error": "El usuario destinatario no existe",
+				"from_balance": None,
+				"to_balance": None
+			}
+		
+		# Crear wallets si no existen
+		conn.execute(
+			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
+			"ON CONFLICT(user_id) DO NOTHING",
+			(from_user_id, now_iso, now_iso)
+		)
+		conn.execute(
+			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
+			"ON CONFLICT(user_id) DO NOTHING",
+			(to_user_id, now_iso, now_iso)
+		)
+		
+		# Verificar balance del remitente
+		from_wallet = conn.execute(
+			"SELECT balance FROM wallets WHERE user_id = ?",
+			(from_user_id,)
+		).fetchone()
+		
+		if not from_wallet or from_wallet["balance"] < amount:
+			conn.rollback()
+			current_balance = from_wallet["balance"] if from_wallet else 0
+			return {
+				"success": False,
+				"error": f"Fondos insuficientes. Tienes {current_balance:,} puntos",
+				"from_balance": current_balance,
+				"to_balance": None
+			}
+		
+		# Restar puntos del remitente
+		conn.execute(
+			"UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ?",
+			(amount, now_iso, from_user_id)
+		)
+		
+		# Sumar puntos al destinatario
+		conn.execute(
+			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
+			(amount, now_iso, to_user_id)
+		)
+		
+		# Registrar transacción del remitente (gasto)
+		conn.execute(
+			"""INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, created_at)
+			   VALUES (?, ?, ?, ?, ?, ?)""",
+			(from_user_id, -amount, f"transfer_to_user_{to_user_id}", platform, guild_id, now_iso)
+		)
+		
+		# Registrar transacción del destinatario (ingreso)
+		conn.execute(
+			"""INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, created_at)
+			   VALUES (?, ?, ?, ?, ?, ?)""",
+			(to_user_id, amount, f"transfer_from_user_{from_user_id}", platform, guild_id, now_iso)
+		)
+		
+		# Obtener balances finales
+		from_balance = conn.execute(
+			"SELECT balance FROM wallets WHERE user_id = ?",
+			(from_user_id,)
+		).fetchone()
+		
+		to_balance = conn.execute(
+			"SELECT balance FROM wallets WHERE user_id = ?",
+			(to_user_id,)
+		).fetchone()
+		
+		conn.commit()
+		
+		return {
+			"success": True,
+			"error": None,
+			"from_balance": from_balance["balance"] if from_balance else 0,
+			"to_balance": to_balance["balance"] if to_balance else 0
+		}
+		
+	except Exception as e:
+		conn.rollback()
+		return {
+			"success": False,
+			"error": f"Error en la transferencia: {str(e)}",
+			"from_balance": None,
+			"to_balance": None
+		}
+	finally:
+		conn.close()
+
+
 def get_user_transactions(user_id: int, limit: int = 50) -> List[Dict[str, any]]:
 	"""
 	Obtiene el historial de transacciones de un usuario.
