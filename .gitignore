@@ -56,6 +56,12 @@ keys/
 *.pem
 *.secret
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
 # Logs
 *.log
 logs/
