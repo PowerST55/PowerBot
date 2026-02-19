@@ -66,6 +66,7 @@ def init_database():
             youtube_channel_id TEXT NOT NULL UNIQUE,
             youtube_username TEXT,
             channel_avatar_url TEXT,
+            user_type TEXT DEFAULT 'regular',
             subscribers INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,

@@ -50,18 +50,20 @@ class YouTubeProfile:
     """Modelo de perfil YouTube (para uso futuro)"""
     
     def __init__(self, id: int, user_id: int, youtube_channel_id: str, youtube_username: str = None,
-                 channel_avatar_url: str = None, subscribers: int = 0, created_at: datetime = None, updated_at: datetime = None):
+                 channel_avatar_url: str = None, subscribers: int = 0, user_type: str = "regular",
+                 created_at: datetime = None, updated_at: datetime = None):
         self.id = id
         self.user_id = user_id
         self.youtube_channel_id = youtube_channel_id
         self.youtube_username = youtube_username
         self.channel_avatar_url = channel_avatar_url
         self.subscribers = subscribers
+        self.user_type = user_type  # 'owner', 'moderator', 'member', 'regular'
         self.created_at = created_at
         self.updated_at = updated_at
     
     def __repr__(self):
-        return f"<YouTubeProfile user_id={self.user_id} youtube_id={self.youtube_channel_id}>"
+        return f"<YouTubeProfile user_id={self.user_id} youtube_id={self.youtube_channel_id} type={self.user_type}>"
 
 
 # ============================================================
@@ -307,15 +309,16 @@ def update_discord_profile(user_id: int, discord_username: str = None, avatar_ur
 # ============================================================
 
 def create_youtube_profile(user_id: int, youtube_channel_id: str, youtube_username: str = None,
-                          channel_avatar_url: str = None) -> Optional[YouTubeProfile]:
+                          channel_avatar_url: str = None, user_type: str = "regular") -> Optional[YouTubeProfile]:
     """
-    Crea un perfil YouTube para un usuario (para uso futuro).
+    Crea un perfil YouTube para un usuario.
     
     Args:
         user_id: ID único del usuario
         youtube_channel_id: ID del canal de YouTube
         youtube_username: Nombre del canal
         channel_avatar_url: URL del avatar del canal
+        user_type: Tipo de usuario ('owner', 'moderator', 'member', 'regular')
         
     Returns:
         YouTubeProfile: Perfil YouTube creado o None si falla
@@ -325,9 +328,9 @@ def create_youtube_profile(user_id: int, youtube_channel_id: str, youtube_userna
         cursor = conn.cursor()
         
         cursor.execute(
-            """INSERT INTO youtube_profile (user_id, youtube_channel_id, youtube_username, channel_avatar_url, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (user_id, youtube_channel_id, youtube_username, channel_avatar_url, datetime.now(), datetime.now())
+            """INSERT INTO youtube_profile (user_id, youtube_channel_id, youtube_username, channel_avatar_url, user_type, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, youtube_channel_id, youtube_username, channel_avatar_url, user_type, datetime.now(), datetime.now())
         )
         conn.commit()
         profile_id = cursor.lastrowid
@@ -357,9 +360,10 @@ def get_youtube_profile_by_channel_id(youtube_channel_id: str) -> Optional[YouTu
     conn.close()
     
     if row:
+        user_type = row.get('user_type', 'regular') if hasattr(row, 'get') else getattr(row, 'user_type', 'regular')
         return YouTubeProfile(
             row['id'], row['user_id'], row['youtube_channel_id'], row['youtube_username'],
-            row['channel_avatar_url'], row['subscribers'], row['created_at'], row['updated_at']
+            row['channel_avatar_url'], row['subscribers'], user_type, row['created_at'], row['updated_at']
         )
     return None
 
@@ -382,11 +386,86 @@ def get_youtube_profile_by_id(profile_id: int) -> Optional[YouTubeProfile]:
     conn.close()
     
     if row:
+        user_type = row.get('user_type', 'regular') if hasattr(row, 'get') else getattr(row, 'user_type', 'regular')
         return YouTubeProfile(
             row['id'], row['user_id'], row['youtube_channel_id'], row['youtube_username'],
-            row['channel_avatar_url'], row['subscribers'], row['created_at'], row['updated_at']
+            row['channel_avatar_url'], row['subscribers'], user_type, row['created_at'], row['updated_at']
         )
     return None
+
+
+def get_youtube_profile_by_user_id(user_id: int) -> Optional[YouTubeProfile]:
+    """
+    Obtiene el perfil YouTube por ID de usuario universal.
+    
+    Args:
+        user_id: ID único del usuario
+        
+    Returns:
+        YouTubeProfile: Perfil encontrado o None
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM youtube_profile WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        user_type = row.get('user_type', 'regular') if hasattr(row, 'get') else getattr(row, 'user_type', 'regular')
+        return YouTubeProfile(
+            row['id'], row['user_id'], row['youtube_channel_id'], row['youtube_username'],
+            row['channel_avatar_url'], row['subscribers'], user_type, row['created_at'], row['updated_at']
+        )
+    return None
+
+
+def update_youtube_profile(user_id: int, youtube_username: str = None, channel_avatar_url: str = None,
+                          user_type: str = None, subscribers: int = None) -> bool:
+    """
+    Actualiza información del perfil YouTube.
+    
+    Args:
+        user_id: ID único del usuario
+        youtube_username: Nuevo nombre de usuario YouTube
+        channel_avatar_url: Nuevo URL del avatar
+        user_type: Nuevo tipo de usuario
+        subscribers: Nuevo conteo de suscriptores
+        
+    Returns:
+        bool: True si se actualizó
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    updates = ["updated_at = ?"]
+    params = [datetime.now()]
+    
+    if youtube_username:
+        updates.append("youtube_username = ?")
+        params.append(youtube_username)
+    
+    if channel_avatar_url:
+        updates.append("channel_avatar_url = ?")
+        params.append(channel_avatar_url)
+    
+    if user_type:
+        updates.append("user_type = ?")
+        params.append(user_type)
+    
+    if subscribers is not None:
+        updates.append("subscribers = ?")
+        params.append(subscribers)
+    
+    params.append(user_id)
+    
+    query = f"UPDATE youtube_profile SET {', '.join(updates)} WHERE user_id = ?"
+    cursor.execute(query, params)
+    conn.commit()
+    success = cursor.rowcount > 0
+    conn.close()
+    
+    return success
 
 
 # ============================================================

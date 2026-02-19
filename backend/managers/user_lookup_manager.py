@@ -88,10 +88,8 @@ class UserLookupResult:
     def youtube_profile(self) -> Optional[YouTubeProfile]:
         """Obtiene perfil de YouTube si existe"""
         if self._cached_youtube_profile is None:
-            from backend.managers.user_manager import get_youtube_profile_by_id
-            # Necesitamos buscar por user_id, no por profile_id
-            # Esta es una limitación actual - puedes agregar get_youtube_profile_by_user_id en user_manager
-            pass
+            from backend.managers.user_manager import get_youtube_profile_by_user_id
+            self._cached_youtube_profile = get_youtube_profile_by_user_id(self.user_id)
         return self._cached_youtube_profile
     
     @property

@@ -21,6 +21,7 @@ from backend.database import init_database
 from backend.managers import get_or_create_discord_user
 from backend.services.discord_bot.economy.earning import process_message_earning
 from backend.services.discord_bot.config.economy import EconomyConfig
+from backend.services.discord_bot.discord_avatar_packager import DiscordAvatarPackager
 
 
 class PowerBotDiscord(commands.Bot):
@@ -167,22 +168,38 @@ class PowerBotDiscord(commands.Bot):
     async def _auto_register_user(self, user: discord.User):
         """
         Auto-registra un usuario en la DB si no existe.
+        Descarga avatar automáticamente.
         
         Args:
             user: discord.User a registrar
         """
         try:
+            avatar_url = str(user.avatar.url) if user.avatar else None
+            
             user_obj, discord_profile, is_new = await asyncio.to_thread(
                 get_or_create_discord_user,
                 str(user.id),
                 user.name,
-                str(user.avatar.url) if user.avatar else None
+                avatar_url
             )
             
             if is_new:
                 print(f"✨ Nuevo usuario registrado: {user.name} (ID: {user.id})")
+            
+            # Descargar avatar si existe
+            if avatar_url and user_obj and user_obj.user_id:
+                try:
+                    await asyncio.to_thread(
+                        DiscordAvatarPackager.download_and_update_avatar,
+                        user_obj.user_id,
+                        str(user.id),
+                        avatar_url
+                    )
+                except Exception as e:
+                    print(f"⚠️  Error descargando avatar para {user.name}: {e}")
         
         except Exception as e:
+            print(f"⚠️ Error registrando usuario en comando: {e}")
             print(f"❌ Error registrando usuario {user.name}: {e}")
     
     async def _is_earning_channel(self, guild_id: int, channel_id: int) -> bool:

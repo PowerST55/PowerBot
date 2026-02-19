@@ -2,6 +2,7 @@
 Comandos generales para PowerBot Discord.
 """
 import discord
+import asyncio
 from discord import app_commands
 from discord.ext import commands
 from typing import Optional
@@ -37,62 +38,118 @@ def setup_general_commands(bot: commands.Bot) -> None:
 		if target is None and user_id is None:
 			target = interaction.user
 
-		if target is not None:
-			lookup = find_user_by_discord_id(str(target.id))
-			if not lookup:
-				embed = discord.Embed(
-					title="❌ Usuario no encontrado",
-					description=f"No existe registro para {target.mention}.",
-					color=discord.Color.red()
-				)
-				await interaction.followup.send(embed=embed, ephemeral=True)
-				return
-			display_name = target.display_name
-			avatar_url = str(target.display_avatar.url)
-		else:
-			lookup = find_user_by_global_id(user_id)
-			if not lookup:
-				embed = discord.Embed(
-					title="❌ Usuario no encontrado",
-					description=f"No existe usuario con ID universal: {user_id}",
-					color=discord.Color.red()
-				)
-				await interaction.followup.send(embed=embed, ephemeral=True)
-				return
-			display_name = lookup.display_name
-			avatar_url = None
-			if lookup.discord_profile and lookup.discord_profile.avatar_url:
-				avatar_url = lookup.discord_profile.avatar_url
+		# Función helper para cargar datos de forma síncrona
+		def load_user_data(target_id=None, user_global_id=None):
+			if target_id is not None:
+				return find_user_by_discord_id(target_id)
+			else:
+				return find_user_by_global_id(user_global_id)
+		
+		def get_user_info(lookup, target_obj=None):
+			"""Carga TODA la información del usuario aquí en el executor"""
+			if target_obj is not None:
+				display_name = target_obj.display_name
+				avatar_url = str(target_obj.display_avatar.url)
+			else:
+				display_name = lookup.display_name
+				avatar_url = None
+				
+				# Prioridad: Discord > YouTube para el avatar del embed
+				# Nota: Para usuarios de Discord buscados por ID, se obtiene el avatar en el thread principal
+				if lookup.discord_profile and lookup.discord_profile.avatar_url:
+					avatar_url = lookup.discord_profile.avatar_url
+				elif lookup.youtube_profile and lookup.youtube_profile.channel_avatar_url:
+					avatar_url = lookup.youtube_profile.channel_avatar_url
+			
+			balance = get_user_balance_by_id(lookup.user_id)
+			points = balance.get("global_points", 0) if balance.get("user_exists") else 0
+			points = round(float(points), 2)
+			
+			inventory_stats = inventory_manager.get_inventory_stats(lookup.user_id)
+			total_quantity = inventory_stats.get("total_quantity", 0)
+			
+			# Precargar información de plataformas aquí
+			has_discord = lookup.has_discord
+			has_youtube = lookup.has_youtube
+			
+			discord_info = None
+			if lookup.discord_profile:
+				discord_info = {
+					'username': lookup.discord_profile.discord_username or "Desconocido",
+					'id': lookup.discord_profile.discord_id
+				}
+			
+			youtube_info = None
+			if lookup.youtube_profile:
+				youtube_info = {
+					'username': lookup.youtube_profile.youtube_username or "Desconocido",
+					'channel_id': lookup.youtube_profile.youtube_channel_id or "Desconocido"
+				}
+			
+			return {
+				'user_id': lookup.user_id,
+				'display_name': display_name,
+				'avatar_url': avatar_url,
+				'points': points,
+				'total_quantity': total_quantity,
+				'has_discord': has_discord,
+				'has_youtube': has_youtube,
+				'discord_info': discord_info,
+				'youtube_info': youtube_info
+			}
 
-		balance = get_user_balance_by_id(lookup.user_id)
-		points = balance.get("global_points", 0) if balance.get("user_exists") else 0
-		points = round(float(points), 2)
+		# Ejecutar las operaciones síncronas en un thread para no bloquear el bot
+		loop = asyncio.get_event_loop()
+		
+		# Cargar lookup del usuario
+		lookup = await loop.run_in_executor(None, load_user_data, 
+			str(target.id) if target else None, user_id)
+		
+		if not lookup:
+			embed = discord.Embed(
+				title="❌ Usuario no encontrado",
+				description=f"No existe registro para {target.mention if target else f'ID universal: {user_id}'}.",
+				color=discord.Color.red()
+			)
+			await interaction.followup.send(embed=embed, ephemeral=True)
+			return
+		
+		# Cargar info del usuario (TODA la información aquí, sin lazy loading después)
+		user_info = await loop.run_in_executor(None, get_user_info, lookup, target)
 
-		inventory_stats = inventory_manager.get_inventory_stats(lookup.user_id)
-		total_quantity = inventory_stats.get("total_quantity", 0)
+		# **AQUÍ en el thread principal: si es búsqueda por ID de Discord, obtener avatar en tiempo real**
+		if target is None and lookup.has_discord and lookup.discord_profile:
+			try:
+				# Obtener usuario de Discord en tiempo real del cache del bot
+				discord_user = interaction.client.get_user(int(lookup.discord_profile.discord_id))
+				if discord_user:
+					user_info['avatar_url'] = str(discord_user.display_avatar.url)
+			except (ValueError, TypeError):
+				pass  # Usar lo que esté en user_info['avatar_url'] (de BD, si existe)
 
+		# Ya NO accedemos a los perfiles en el thread principal, usamos los datos precargados
 		platforms = []
-		if lookup.has_discord:
+		if user_info['has_discord']:
 			platforms.append("Discord")
-		if lookup.has_youtube:
+		if user_info['has_youtube']:
 			platforms.append("YouTube")
 
 		platforms_text = " y ".join(platforms) if platforms else "Sin plataformas"
 
 		embed = discord.Embed(
-			title=f"🧾 ID de {display_name}",
-			description=f"**ID Universal:** `{lookup.user_id}`",
+			title=f"🧾 ID de {user_info['display_name']}",
+			description=f"**ID Universal:** `{user_info['user_id']}`",
 			color=discord.Color.blue()
 		)
 
 		embed.add_field(
 			name="💰 Puntos",
-			value=f"{points:,.2f}",
+			value=f"{user_info['points']:,.2f}",
 			inline=True
 		)
 		embed.add_field(
 			name="🎒 Inventario",
-			value=f"{total_quantity} items",
+			value=f"{user_info['total_quantity']} items",
 			inline=True
 		)
 		embed.add_field(
@@ -101,16 +158,24 @@ def setup_general_commands(bot: commands.Bot) -> None:
 			inline=False
 		)
 
-		if lookup.discord_profile:
-			discord_name = lookup.discord_profile.discord_username or "Desconocido"
-			discord_id = lookup.discord_profile.discord_id
+		# Usar datos precargados, NO acceder a los perfiles aquí
+		if user_info['discord_info']:
 			embed.add_field(
 				name="Discord",
-				value=f"{discord_name} (`{discord_id}`)",
+				value=f"{user_info['discord_info']['username']} (`{user_info['discord_info']['id']}`)",
 				inline=False
 			)
 
-		if avatar_url:
-			embed.set_thumbnail(url=avatar_url)
+		if user_info['youtube_info']:
+			embed.add_field(
+				name="YouTube",
+				value=f"{user_info['youtube_info']['username']} (`{user_info['youtube_info']['channel_id']}`)",
+				inline=False
+			)
+
+		if user_info['avatar_url']:
+			# Solo establecer thumbnail si es una URL válida (http/https)
+			if user_info['avatar_url'].startswith('http://') or user_info['avatar_url'].startswith('https://'):
+				embed.set_thumbnail(url=user_info['avatar_url'])
 
 		await interaction.followup.send(embed=embed)

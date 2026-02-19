@@ -1,6 +1,7 @@
 """
 YouTube API Core Module
 Manages authentication and provides a clean client interface for YouTube interactions.
+SSL configuration handled by ssl_fix.py to avoid OpenSSL 3.x compatibility issues.
 """
 
 import os
@@ -9,6 +10,9 @@ import logging
 import ssl
 from pathlib import Path
 from typing import Optional
+
+# FIX: Apply SSL patches for OpenSSL 3.x compatibility BEFORE any other imports
+from . import ssl_fix  # noqa: F401
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -137,6 +141,9 @@ class YouTubeClient:
             credentials: Authenticated Credentials object.
         """
         self.credentials = credentials
+        
+        # FIX: SSL configuration is handled by ssl_fix.py
+        # The googleapiclient.discovery.build() will use the patched SSL context
         self.service = build("youtube", "v3", credentials=credentials)
         logger.info("YouTube API client initialized successfully")
 
@@ -170,14 +177,15 @@ class YouTubeClient:
 
     def send_message(self, live_chat_id: str, message: str) -> Optional[dict]:
         """
-        Send a message to a live chat.
+        Send a message to a live chat (single attempt, no retries).
+        Retries are handled at a higher level in send_message.py.
 
         Args:
             live_chat_id: The live chat ID.
             message: The message text to send.
 
         Returns:
-            Response de la API si se envio, None en caso contrario.
+            Response dict with message ID if successful, or error info dict.
         """
         try:
             response = self.service.liveChatMessages().insert(
@@ -192,20 +200,33 @@ class YouTubeClient:
             ).execute()
 
             if response and response.get("id"):
-                logger.debug("Message sent to live chat")
+                logger.debug("✅ Message sent to live chat")
                 return response
             logger.warning("Message send returned empty response")
-            return None
+            return {"empty_response": True}
 
         except ssl.SSLError as e:
-            logger.warning(f"SSL error sending message: {e}")
-            return {"ssl_error": True}
+            # SSL error: don't retry here, let higher level handle it
+            logger.warning(f"🔴 SSL error in send_message: {e}")
+            return {"ssl_error": True, "message": str(e)}
+            
         except HttpError as e:
-            logger.error(f"HTTP error sending message: {e}")
-            return None
+            if "quotaExceeded" in str(e):
+                logger.warning("⚠️  YouTube API quota exceeded")
+                return {"quota_error": True}
+            elif "403" in str(e):
+                logger.error(f"❌ Access forbidden - check permissions: {e}")
+                return {"permission_error": True}
+            else:
+                logger.error(f"❌ HTTP error sending message: {e}")
+                return {"http_error": True}
+        except OSError as e:
+            # Network errors
+            logger.warning(f"🔴 Network error sending message: {e}")
+            return {"network_error": True, "message": str(e)}
         except Exception as e:
-            logger.error(f"Unexpected error sending message: {e}")
-            return None
+            logger.error(f"❌ Unexpected error sending message: {type(e).__name__}: {e}")
+            return {"unexpected_error": True}
 
 
 class YouTubeAPI:
