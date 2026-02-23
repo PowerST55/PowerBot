@@ -1,0 +1,185 @@
+/* ================================================= */
+/* NOTIFICATIONS OVERLAY – BLUE THEME (OBS READY)   */
+/* ================================================= */
+
+:root {
+  --bg: transparent;
+
+  /* Fondo negro con azul oscuro */
+  --card-bg-top: rgba(10, 15, 30, 0.92);
+  --card-bg-bottom: rgba(5, 8, 15, 0.94);
+
+  /* Detalles en gris */
+  --card-border: rgba(100, 110, 130, 0.4);
+  --accent: #2d4a7c;
+  --accent-soft: rgba(45, 74, 124, 0.15);
+
+  /* Texto en escala de grises */
+  --text: #f0f0f0;
+  --muted: #b0b5c0;
+
+  /* Sombras más leves */
+  --shadow:
+    0 8px 20px rgba(0, 0, 0, 0.5),
+    inset 0 0 15px rgba(40, 50, 80, 0.08);
+}
+
+/* ========================= */
+/* BASE */
+/* ========================= */
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: 'Segoe UI', 'Arial', 'Helvetica', sans-serif;
+  color: var(--text);
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ========================= */
+/* CONTAINER */
+/* ========================= */
+
+#notifications-root {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 14px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+/* ========================= */
+/* NOTIFICATION CARD */
+/* ========================= */
+
+.notification-box {
+  width: auto;
+  max-width: 480px;
+  min-height: 80px;
+  padding: 16px 20px;
+  border-radius: 24px;
+
+  background: linear-gradient(
+    180deg,
+    var(--card-bg-top) 0%,
+    var(--card-bg-bottom) 100%
+  );
+
+  /* Contorno sutil */
+  border: 2px solid var(--card-border);
+
+  box-shadow:
+    0 0 0 3px rgba(100, 110, 130, 0.15),
+    var(--shadow);
+
+  opacity: 0;
+  transform: translateX(-14px) scale(0.98);
+  transition:
+    opacity 240ms ease,
+    transform 260ms cubic-bezier(.2,.8,.2,1);
+
+  will-change: opacity, transform;
+  text-align: left;
+}
+
+.notification-box.show {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+/* ========================= */
+/* STYLE 1 – TEXT ONLY */
+/* ========================= */
+
+.style-1 .notification-title {
+  font-size: 34px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  line-height: 1.3;
+  letter-spacing: 0.3px;
+  color: var(--text);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+}
+
+.style-1 .notification-message {
+  font-size: 26px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+}
+
+/* ========================= */
+/* STYLE 2 – AVATAR + TEXT */
+/* ========================= */
+
+.style-2 {
+  padding: 16px 20px;
+}
+
+.style-2 .upper-container {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.style-2 .profile-image {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+
+  background-color: #1a1f30;
+  border: 2px solid rgba(150, 160, 180, 0.5);
+
+  box-shadow:
+    0 0 0 3px rgba(80, 90, 110, 0.2),
+    0 6px 15px rgba(0, 0, 0, 0.5);
+}
+
+.style-2 .notification-title {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+}
+
+.style-2 .notification-message {
+  font-size: 28px;
+  margin-top: 8px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+}
+
+/* ========================= */
+/* BADGE */
+/* ========================= */
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+
+  background: linear-gradient(
+    180deg,
+    rgba(63,107,255,0.25),
+    rgba(63,107,255,0.15)
+  );
+
+  color: #dfe5ff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+
+  border: 1px solid rgba(120,160,255,0.35);
+}

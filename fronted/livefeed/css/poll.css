@@ -1,0 +1,420 @@
+/* ========================= */
+/* GENERAL */
+/* ========================= */
+body {
+    font-family: Arial, sans-serif;
+    color: white;
+    background: transparent;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+/* ========================= */
+/* CONTENEDOR PRINCIPAL */
+/* ========================= */
+.poll-container {
+    display: none;
+    width: 150%;
+    max-width: 1000px;
+    min-width: 700px;
+    padding: 100px;
+    text-align: center;
+    position: relative;
+
+    border-radius: 35px;
+
+    /* Doble contorno */
+    border: 3px solid rgba(255, 255, 255, 0.9);
+
+    box-shadow:
+        0 0 0 8px rgba(255, 255, 255, 0.9),
+        0 25px 60px rgba(0, 0, 0, 0.8),
+        inset 0 0 30px rgba(120, 100, 255, 0.15);
+
+    background: linear-gradient(
+        180deg,
+        #191b38 0%,
+        #000429 100%
+    );
+}
+
+/* ========================= */
+/* TITULOS */
+/* ========================= */
+.waiting-text {
+    font-size: 6em;
+    font-weight: bold;
+    margin-bottom: 55px;
+    margin-top: -45px;
+    text-shadow: 0 4px 15px rgba(0,0,0,0.7);
+}
+
+/* ========================= */
+/* DOTS */
+/* ========================= */
+.dots-container {
+    display: flex;
+    justify-content: center;
+    margin-top: 10px;
+}
+
+.dot {
+    width: 25px;
+    height: 25px;
+    margin: 0 6px;
+    background-color: white;
+    border-radius: 50%;
+    animation: blink 2s infinite both;
+    box-shadow: 0 0 10px rgba(255,255,255,0.6);
+}
+
+.dot:nth-child(2) { animation-delay: .2s; }
+.dot:nth-child(3) { animation-delay: .4s; }
+
+@keyframes blink {
+    0%,80%,100% { opacity: 0; }
+    40% { opacity: 1; }
+}
+
+/* ========================= */
+/* OPCIONES */
+/* ========================= */
+.options-container {
+    margin-top: 5px;
+    margin-bottom: 100px;
+}
+
+.option {
+    margin: 20px 0;
+    padding: 20px;
+    border-radius: 40px;
+
+    background: rgba(16, 20, 54, 0.45);
+    border: 3px solid rgba(37, 92, 145, 0.1);
+
+    box-shadow:
+        inset 0 0 12px rgba(255,255,255,0.04),
+        0 6px 18px rgba(0,0,0,0.5);
+}
+
+.option-name {
+    font-size: 4.5em;
+    font-weight: bold;
+    text-align: left;
+    margin-bottom: 15px;
+}
+
+/* ========================= */
+/* BARRAS DE PROGRESO */
+/* ========================= */
+.progress-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.progress-bar-container {
+    flex: 1;
+    height: 40px;
+    border-radius: 40px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.15);
+    box-shadow: inset 0 0 6px rgba(0,0,0,0.5);
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #0b72ad, #1c5bcf);
+    box-shadow: inset 0 0 10px rgba(20, 9, 124, 0.4);
+    transition: width 0.5s ease-in-out;
+}
+
+.progress-percentage {
+    font-size: 2.5em;
+    width: 80px;
+    font-weight: bold;
+    color: #ddd;
+    visibility: hidden;
+}
+
+/* ========================= */
+/* BARRA DE TIEMPO */
+/* ========================= */
+#lifetime-container {
+    margin-top: 50px;
+    margin-bottom: -50px;
+}
+
+.lifeprogress-bar-container {
+    width: 100%;
+    height: 30px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.25);
+    overflow: hidden;
+    box-shadow: inset 0 0 6px rgba(0,0,0,0.6);
+}
+
+.lifetime-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #ffffff, #dcdcdc);
+    transition: width 0.5s linear, background-color 0.5s;
+}
+
+.time-remaining {
+    margin-top: 25px;
+    font-weight: bold;
+    font-size: 4em;
+}
+
+/* ========================= */
+/* WINNER OVERLAY */
+/* ========================= */
+.winner-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    border-radius: 35px;
+}
+
+.winner-container {
+    padding: 55px;
+    border-radius: 28px;
+    text-align: center;
+
+    background: linear-gradient(180deg, #0f0f35, #07071a);
+    border: 2px solid rgba(255,255,255,0.9);
+
+    box-shadow:
+        0 0 0 4px rgba(25,45,120,0.9),
+        0 30px 70px rgba(0,0,0,0.9),
+        inset 0 0 25px rgba(120,100,255,0.2);
+}
+
+.winner-title {
+    font-size: 3em;
+    margin-bottom: 15px;
+}
+
+.winner-name {
+    font-size: 4em;
+    font-weight: bold;
+}
+
+.countdown-bar {
+    margin-top: 50px;
+    height: 20px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.2);
+}
+
+.countdown-fill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, #ffffff, #bdbdbd);
+    animation: countdown 5s linear forwards;
+}
+
+@keyframes countdown {
+    from { width: 100%; }
+    to { width: 0%; }
+}
+
+/* ========================= */
+/* CONTENEDOR PRINCIPAL - ESTADO BASE */
+/* ========================= */
+.container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1);
+    transform-origin: center center;
+    opacity: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    /* Transición suave para transform y posición */
+    transition: transform 0.45s ease, top 0.45s ease, right 0.45s ease, left 0.45s ease, opacity 0.25s ease;
+    will-change: transform, top, right, left;
+}
+
+/* Cuando entra, la animación toma prioridad */
+.enter {
+    animation: enter 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    transition: none !important;
+}
+
+@keyframes enter {
+    0% {
+        transform: translate(-50%, -150vh) scale(0.1);
+        opacity: 0;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+    }
+}
+
+.exit {
+    animation: exit 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards !important;
+    transition: none !important;
+}
+
+@keyframes exit {
+    0% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(-50%, -150vh) scale(0.1);
+        opacity: 0;
+    }
+}
+
+.container.mini.exit {
+    animation: exitMini 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards !important;
+    position: fixed !important;
+    transform-origin: top right !important;
+}
+
+@keyframes exitMini {
+    0% {
+        transform: translate(0, 0) scale(0.75);
+        opacity: 1;
+    }
+    40% {
+        transform: translate(0, 0) scale(0.85);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(0, -150vh) scale(0.1);
+        opacity: 0;
+    }
+}
+
+/* ========================= */
+/* MODO MINI */
+/* ========================= */
+.container.mini {
+    position: fixed !important;
+    top: 30px !important;
+    right: 95px !important;
+    left: auto !important;
+    transform-origin: top right !important;
+    opacity: 1 !important;
+    animation: none !important;
+    transition: transform 0.45s ease, top 0.45s ease, right 0.45s ease !important;
+}
+
+/* Aplicar la escala mini SOLO cuando NO está en modo salida */
+.container.mini:not(.exit) {
+    transform: translate(0, 0) scale(0.75);
+    display: flex !important;
+}
+
+.container.mini.exit {
+    animation: exitMini 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+.container.mini .poll-container,
+.container.mini #waiting-poll,
+.container.mini #poll-container {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Ocultar waiting poll en modo mini si hay una encuesta activa */
+.container.mini #waiting-poll {
+    display: none !important;
+}
+
+.container.mini .poll-container,
+.container.mini #waiting-poll {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    padding: 60px;
+}
+
+.container.mini .waiting-text {
+    font-size: 3em;
+    margin-bottom: 20px;
+    margin-top: -20px;
+}
+
+.container.mini .option-name {
+    font-size: 2em;
+    margin-bottom: 10px;
+}
+
+.container.mini .progress-percentage {
+    font-size: 1.2em;
+    width: 50px;
+}
+
+.container.mini .time-remaining {
+    font-size: 2em;
+    margin-top: 15px;
+}
+
+.container.mini .dot {
+    width: 15px;
+    height: 15px;
+    margin: 0 4px;
+}
+
+.container.mini .dots-container {
+    margin-top: 5px;
+}
+
+.container.mini .option {
+    margin: 10px 0;
+    padding: 10px;
+}
+
+.container.mini #lifetime-container {
+    margin-top: 20px;
+    margin-bottom: -20px;
+}
+
+.container.mini .lifeprogress-bar-container {
+    height: 20px;
+}
+
+.container.mini .progress-bar-container {
+    height: 25px;
+}
+
+.container.mini .winner-container {
+    padding: 30px;
+}
+
+.container.mini .winner-title {
+    font-size: 1.8em;
+    margin-bottom: 8px;
+}
+
+.container.mini .winner-name {
+    font-size: 2.2em;
+}
+
+.container.mini .countdown-bar {
+    margin-top: 20px;
+    height: 12px;
+}

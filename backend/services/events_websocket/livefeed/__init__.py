@@ -1,0 +1,1 @@
+"""Eventos websocket para livefeed."""

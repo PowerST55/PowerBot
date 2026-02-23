@@ -290,18 +290,41 @@ async def cmd_youtube_logout(ctx: CommandContext) -> None:
 
 async def cmd_youtube_autorun(ctx: CommandContext) -> None:
     """
-    Alterna el autorun de YouTube al iniciar el bot.
-    Uso: youtube_autorun
+    Configura/alterna el autorun de YouTube al iniciar el bot.
+    Uso:
+      yt autorun
+      yt autorun true
+      yt autorun false
+      yt autorun = true
     """
     config = _load_config()
     
     # Asegurar que existe la sección youtube
     if "youtube" not in config:
         config["youtube"] = {}
-    
-    # Alternar el valor
-    current = config["youtube"].get("autorun", False)
-    config["youtube"]["autorun"] = not current
+
+    # Modo explícito: true/false con o sin '='
+    explicit_value = None
+    if ctx.args:
+        normalized_args = [str(a).strip().lower() for a in ctx.args if str(a).strip()]
+        if normalized_args and normalized_args[0] == "=":
+            normalized_args = normalized_args[1:]
+
+        if normalized_args:
+            token = normalized_args[0]
+            if token in {"=true", "true", "on", "1", "si", "sí"}:
+                explicit_value = True
+            elif token in {"=false", "false", "off", "0", "no"}:
+                explicit_value = False
+            else:
+                ctx.error("Uso: yt autorun [true|false]")
+                return
+
+    if explicit_value is None:
+        current = bool(config["youtube"].get("autorun", False))
+        config["youtube"]["autorun"] = not current
+    else:
+        config["youtube"]["autorun"] = explicit_value
     
     # Guardar
     _save_config(config)
@@ -328,13 +351,15 @@ async def cmd_youtube_help(ctx: CommandContext) -> None:
 🎬 [bold cyan]Comandos de YouTube API:[/bold cyan]
 
   [yellow]yapi[/yellow]             - 🚀 Conecta YouTube e inicia listener (TODO EN UNO)
-  [yellow]yt autorun[/yellow]       - Alterna el inicio automático de YouTube
+    [yellow]yt autorun[/yellow]       - Alterna/define inicio automático (true|false)
   [yellow]yt listener[/yellow]      - Inicia el listener de mensajes del chat
   [yellow]yt stop_listener[/yellow] - Detiene el listener de mensajes
   [yellow]yt logout[/yellow]        - 🚪 Cierra sesión y borra el token
   [yellow]yt status[/yellow]        - Muestra el estado de YouTube y listener
   [yellow]yt help[/yellow]          - Muestra esta ayuda
     [yellow]yt set currency[/yellow]  - Configura nombre/símbolo de moneda YouTube
+        [yellow]yt set gamble[/yellow]    - Configura límite/cooldown de !g y !gamble
+        [yellow]yt set slots[/yellow]     - Configura límite/cooldown de !tm y aliases
 
 [bold cyan]Características:[/bold cyan]
   • Gestión automática de Chat ID con persistencia
@@ -344,12 +369,17 @@ async def cmd_youtube_help(ctx: CommandContext) -> None:
 
 [bold cyan]Ejemplos:[/bold cyan]
   [dim]yapi[/dim]                  - Inicia todo el sistema automáticamente ⭐
-  [dim]yt autorun[/dim]            - Activa/desactiva el autorun
+    [dim]yt autorun true[/dim]       - Activa autorun (modo yapi completo)
+    [dim]yt autorun false[/dim]      - Desactiva autorun
   [dim]yt listener[/dim]           - Comienza a escuchar mensajes del chat
   [dim]yt stop_listener[/dim]      - Detiene de escuchar mensajes
   [dim]yt logout[/dim]             - Cierra sesión y requiere nueva autenticación
   [dim]yt status[/dim]             - Ver estado de la conexión y monitoreo
     [dim]yt set currency pews 💎[/dim]- Configura la moneda de YouTube
+        [dim]yt set gamble 150 0[/dim]    - Limita gamble a 150 y sin cooldown
+        [dim]yt set slots 300 30[/dim]    - Limita slots a 300 con 30s cooldown
+        [dim]!g 100 | !gamble 100[/dim]   - Comandos de gamble en YouTube chat
+        [dim]!tm 50 | !tragamonedas 50[/dim]- Comandos de slots en YouTube chat
 """
     
     console.print(Panel(

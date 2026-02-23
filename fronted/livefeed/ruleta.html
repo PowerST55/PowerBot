@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@200;300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <title>Ruleta Dinámica</title>
+    <link rel="stylesheet" href="css/ruleta.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="wheel-container">
+            <div class="selector"></div>
+            <canvas id="wheel"></canvas>
+        </div>
+    </div>
+
+    <div id="overlay-background" class="overlay-background"></div>
+    <div id="winner-overlay">
+        <div id="winner-container">
+            <h2 id="winner-title">Felicidades A Nuestro Ganador:</h2>
+            <div class="winner-content">
+                <img id="winner-image" class="winner-image" src="image-url.jpg" alt="Winner Image" />
+                <span id="winner-name" class="winner-name">Nombre Del Ganador</span>
+            </div>
+            <div class="progress-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
+
+    <audio id="spin-var1" src="sounds/spin/Spin-var1.wav"></audio>
+    <audio id="spin-var2" src="sounds/spin/Spin-var2.wav"></audio>
+    <audio id="spin-var3" src="sounds/spin/Spin-var3.wav"></audio>
+    <audio id="spin-var4" src="sounds/spin/Spin-var4.wav"></audio>
+    <audio id="spin-var5" src="sounds/spin/Spin-var5.wav"></audio>
+
+    <audio id="winner-sound" src="sounds/spin/winner-soundg.mp3"></audio>
+    <audio id="join-sound" src="sounds/spin/join-sound.mp3"></audio>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/webfont/1.6.26/webfont.js"></script>
+    <script>
+        WebFont.load({
+            google: {
+                families: ['Oswald:200,300,400,500,600,700', 'Poppins:400,600']
+            },
+            active: function () {
+                document.body.style.opacity = '1';
+            }
+        });
+
+        let items = [];
+        let spinning = false;
+        let keepWinner = false; // Booleano para mantener al ganador
+        let slowRotation = true; // Controla el giro lento continuo
+        let animationFinished = false; // Flag para controlar cuando terminó la animación de entrada
+        let canvas = document.getElementById("wheel");
+        let ctx = canvas.getContext("2d");
+        let size = 519;
+        const scale = size / 1000;
+        let currentRotation = 0;
+        let socket;
+        let placeholderprofile = "https://th.bing.com/th/id/OIP.aiDGdmdUAX_iNgRMERipyQHaHF?rs=1&pid=ImgDetMain"
+
+        // Elementos de audio
+        const spinSounds = [
+            document.getElementById("spin-var1")
+            //document.getElementById("spin-var2")
+            //document.getElementById("spin-var3"),
+            //document.getElementById("spin-var4"),
+            // document.getElementById("spin-var5")
+
+        ];
+        spinSounds.forEach(sound => sound.loop = false);
+        const winnerSound = document.getElementById("winner-sound");
+        const joinSound = document.getElementById("join-sound");
+
+        canvas.width = size;
+        canvas.height = size;
+        canvas.style.width = `${size}px`;
+        canvas.style.height = `${size}px`;
+        function drawWheel() {
+            let total = items.length;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (total === 0) {
+                ctx.fillStyle = `hsl(327, 100%, 11%)`; // Cambia este color según tus preferencias
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Añadir el texto "PowerBot SpinWheel" en el centro de la ruleta
+                ctx.save();
+                ctx.fillStyle = "white"; // Color del texto, puedes cambiarlo si prefieres otro
+                ctx.font = `bold ${Math.max(32, Math.round(80 * scale))}px Oswald`; // Estilo y tamaño del texto
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                let lines = ["✩Ruleta✩", "PowerBot"];
+                let lineHeight = 100 * scale; // Ajusta la altura entre líneas según tus preferencias
+
+                lines.forEach((line, index) => {
+                    ctx.fillText(line, canvas.width / 2, (canvas.height / 2) - (lineHeight / 2) + (index * lineHeight));
+                });
+
+                // Añadir el texto "Type !join to participate" en gris claro debajo del texto principal
+                ctx.fillStyle = "lightgray"; // Color del texto pequeño
+                ctx.font = `bold ${Math.max(20, Math.round(40 * scale))}px Oswald`; // Estilo y tamaño del texto pequeño
+                ctx.fillText("Escribe !participar para unirte", canvas.width / 2, (canvas.height / 2) + (lines.length * lineHeight / 2) + 50);
+
+                ctx.restore();
+
+                return;
+            }
+
+            let angle = (2 * Math.PI) / total;
+            let baseImgSize = 90 * scale; // Tamaño base de la imagen
+            let minImgSize = 50 * scale;  // Tamaño mínimo de la imagen si hay muchos items
+            let imgSize = baseImgSize; // Inicializa el tamaño de la imagen
+            let fontSize; // Definir la variable aquí
+
+            // Ajustar el tamaño de la imagen según la cantidad de items
+            if (total > 6) {
+                imgSize = Math.max(minImgSize, baseImgSize * (6 / total)); // Reduce el tamaño de la imagen si hay muchos items
+            }
+
+
+            for (let i = 0; i < total; i++) {
+                ctx.beginPath();
+                ctx.moveTo(size / 2, size / 2);
+                ctx.arc(size / 2, size / 2, size / 2, i * angle, (i + 1) * angle);
+                
+                ctx.fillStyle = `hsl(${(204 + i * (100 / total) + Math.random() * 10 - 5) % 360} 99% ${10 + Math.random() * 6}%)`;
+
+
+
+  //hsl(179, 53%, 25%)   hsl(${230 + i * (100 / total)}, 50%, 30%)
+                ctx.fill();
+                if (total > 1) {
+                    ctx.lineWidth = 4.2 * scale;
+                    ctx.strokeStyle = "white";
+                    ctx.stroke();
+                }
+
+                let img = new Image();
+                console.log("name", items[i].text, "img", items[i].image);
+                img.src = items[i].image.src;
+
+                // Renderizar el texto inmediatamente
+                ctx.save();
+                ctx.translate(size / 2, size / 2);
+                ctx.rotate(i * angle + angle / 2);
+
+                let imgX = size / 7;
+                let textX = imgX + imgSize / 1.7 + 10; // Espacio adicional para el texto
+                let textY = 0;
+
+                ctx.fillStyle = "white";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                let text = items[i].text.length > 12 ? items[i].text.substring(0, 12) + '-' : items[i].text;
+                let fontSize = Math.min(100 * scale, Math.max(50 * scale, (400 * scale) / text.length));
+                ctx.font = `bold ${fontSize}px Oswald`;
+
+                ctx.shadowColor = 'rgba(0, 0, 0, 1)';
+                ctx.shadowBlur = 10 * scale;
+                ctx.fillText(text, textX, textY);
+                ctx.shadowBlur = 0;
+
+                ctx.restore();
+
+                img.onload = (function (index, imageAngle) {
+                    return function () {
+                        ctx.save();
+                        ctx.translate(size / 2, size / 2);
+                        ctx.rotate(imageAngle + angle / 2);
+
+                        ctx.beginPath();
+                        ctx.arc(imgX, 0, imgSize / 2, 0, Math.PI * 2);
+                        ctx.clip();
+                        ctx.drawImage(img, imgX - imgSize / 2, -imgSize / 2, imgSize, imgSize);
+                        ctx.restore();
+                    };
+                })(i, i * angle);
+            }
+
+
+
+            if (slowRotation) {
+                requestAnimationFrame(rotateWheelSlowly);
+            }
+        }
+
+        function rotateWheelSlowly() {
+            if (!slowRotation) return;
+            currentRotation += 0.08; // Ajusta la velocidad del giro lento
+            canvas.style.transform = `rotate(${currentRotation}deg)`;
+            requestAnimationFrame(rotateWheelSlowly);
+        }
+
+        function spinWheel(rotation) {
+            if (items.length < 2 || spinning) return;
+
+            spinning = true;
+            slowRotation = false;
+            canvas.style.transition = "none";
+
+            let spinDuration = 5000 + Math.random() * 3000; // Entre 5s y 8s
+            let startRotation = currentRotation;
+            let startTime = performance.now();
+            let lastIndex = -1;
+            let lastPlayTime = 0;
+
+            function updateRotation() {
+                let elapsedTime = performance.now() - startTime;
+                let progress = elapsedTime / spinDuration;
+
+                if (progress >= 1) {
+                    spinning = false;
+                    finalizeSpin();
+                    return;
+                }
+
+                let easeOut = 1 - Math.pow(1 - progress, 3); // Desaceleración progresiva
+                let newRotation = startRotation - easeOut * rotation; // Usar el número random del servidor
+
+                let currentDegrees = (newRotation % 360 + 360) % 360;
+                let segmentAngle = 360 / items.length;
+                let index = Math.floor(((360 - currentDegrees - 90) % 360) / segmentAngle);
+                index = (index + items.length) % items.length;
+
+                let now = performance.now();
+                let timeSinceLastPlay = now - lastPlayTime;
+                let estimatedItemTime = spinDuration / (rotation / segmentAngle);
+
+                // 🛑 Solo reproducir si cambió de ítem y ha pasado suficiente tiempo
+                if (index !== lastIndex && timeSinceLastPlay > estimatedItemTime * 0.7) {
+                    lastIndex = index;
+                    lastPlayTime = now;
+
+                    let pitch = 1.5 - progress * 0.7; // Variación de pitch más natural
+                    let selectedSound = spinSounds[Math.floor(Math.random() * spinSounds.length)]; // Seleccionar sonido aleatorio
+
+                    selectedSound.playbackRate = Math.max(0.8, pitch);
+
+                    if (progress < 0.98) {
+                        selectedSound.currentTime = 0;
+                        selectedSound.play();
+                        console.log(`🔊 Tocó nuevo ítem: ${items[index].text}, Pitch: ${pitch.toFixed(2)}, Sonido: ${selectedSound.src}`);
+                    }
+                }
+
+                canvas.style.transform = `rotate(${newRotation}deg)`;
+                requestAnimationFrame(updateRotation);
+            }
+
+            requestAnimationFrame(updateRotation);
+
+            function finalizeSpin() {
+                let finalDegrees = (currentRotation % 360 + 360) % 360;
+                let segmentAngle = 360 / items.length;
+                let index = Math.floor(((360 - finalDegrees - 90) % 360) / segmentAngle);
+                index = (index + items.length) % items.length;
+
+                
+
+
+
+                let winnerIndex = lastIndex;
+                let winner = items[winnerIndex].text;
+                let winnerimg = items[winnerIndex].image.src;
+                let winnerColor = `hsl(${220 + winnerIndex * (90 / items.length)}, ${30 + (winnerIndex % 2) * 10}%, ${15 + (winnerIndex % 3) * 10}%)`;
+                console.log("🎨 Color del ganador:", winnerColor);
+
+                if (!keepWinner) {
+                    items.splice(winnerIndex, 1);
+                    drawWheel();
+                }
+                showWinner(winner, winnerimg, winnerColor );
+
+                setTimeout(() => {
+                    slowRotation = true;
+                    requestAnimationFrame(rotateWheelSlowly);
+                }, 4000);
+            }
+        }
+
+
+
+
+
+
+
+
+
+        function showWinner(winner, winnerimg, winnerColor) {
+            const mensaje = {
+                type: "winnerspin",
+                data: winner
+            };
+            sendMessageToServer(mensaje);
+            const overlayBackground = document.getElementById("overlay-background");
+            const winnerOverlay = document.getElementById("winner-overlay");
+            const winnerNameElement = document.getElementById("winner-name");
+            const winnerImgElement = document.getElementById("winner-image");
+            const progressBar = document.getElementById("progress-bar");
+            const winnerSound = document.getElementById("winner-sound");
+
+
+            // Mostrar el fondo oscuro y el overlay
+            overlayBackground.style.display = "block";
+            winnerOverlay.style.display = "flex";
+            winnerOverlay.style.flexDirection = "column";
+            winnerOverlay.style.alignItems = "center";
+            winnerOverlay.style.justifyContent = "center";
+            winnerOverlay.style.background = winnerColor;
+
+            // Ajustar el contenido
+            winnerNameElement.textContent = winner;
+            winnerImgElement.src = winnerimg;
+
+            // Reproducir sonido
+            winnerSound.playbackRate = 0.8 + Math.random() * 0.9;
+            winnerSound.currentTime = 0;
+            winnerSound.play();
+
+            // Reiniciar la animación de la barra de progreso
+            progressBar.style.animation = "none";
+            void progressBar.offsetWidth; // Forzar reflujo para reiniciar animación
+            progressBar.style.animation = "progress-animation 5s linear forwards";
+
+            // Ocultar el overlay y el fondo oscuro después de 5 segundos
+
+            setTimeout(() => {
+                winnerOverlay.style.display = "none";
+                overlayBackground.style.display = "none";
+            }, 5000);
+        }
+        
+        // Enviar un mensaje al servidor
+function sendMessageToServer(message) {
+    if (socket.readyState === WebSocket.OPEN) { // Asegúrate de que la conexión está abierta
+        socket.send(JSON.stringify(message)); // Convierte el mensaje en formato JSON y lo envía
+        console.log("Mensaje enviado:", message);
+    } else {
+        console.error("La conexión no está abierta, no se pudo enviar el mensaje.");
+    }
+}
+socket = new WebSocket("ws://localhost:8765"); // Crear nueva conexión
+function connect() {
+    const joinSound = document.getElementById("join-sound");
+
+    socket.onopen = () => {
+        console.log("Conectado al WebSocket");
+        document.querySelector('.container').classList.add('enter');
+        
+        // Marcar que la animación terminó después de 1.6 segundos
+        setTimeout(() => {
+            animationFinished = true;
+            console.log("Animación de entrada finalizada");
+        }, 1600);
+    };
+
+    socket.onmessage = (event) => {
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (error) {
+            console.error("Error al parsear JSON:", error, "Mensaje recibido:", event.data);
+            return;
+        }
+
+        console.log("Mensaje recibido:", data);
+
+        switch (data.type) {
+            case "redirect":
+                console.log("Redirigiendo a:", data.url);
+                // Agregar clase de salida y esperar a que termine la animación
+                const container = document.querySelector('.container');
+                container.classList.add('exit');
+                
+                // Esperar 1.6s (duración de la animación) antes de hacer el redirect
+                setTimeout(() => {
+                    window.location.href = data.url;
+                }, 1600);
+                break;
+            case "add_item":
+                loadImage(data.url).then((image) => {
+                    items.push({ text: data.item, image: image });
+                    console.log(items);
+                    drawWheel();
+
+                    joinSound.playbackRate = 0.9 + Math.random() * 0.3; // Pitch entre 0.9 y 1.2
+                    joinSound.currentTime = 0; // Reiniciar el sonido
+                    joinSound.play();
+                }).catch((error) => {
+                    console.error("Error cargando la imagen:", error);
+                });
+                break;
+            case "spin":
+                spinWheel(data.rotation);
+                break;
+            case "update":
+                drawWheel();
+                break;
+            case "reset":
+                items = [];
+                drawWheel();
+                break;
+            case "set_keep_winner":
+                keepWinner = data.value;
+                break;
+            case "toggle_mini":
+                if (animationFinished) {
+                    toggleMiniMode(data.value);
+                } else {
+                    console.log("Esperando a que termine la animación de entrada");
+                }
+                break;
+            default:
+                console.warn("Tipo de mensaje desconocido:", data);
+        }
+    };
+
+    socket.onclose = () => {
+        console.warn("WebSocket cerrado, redirigiendo a index.html...");
+        window.location.href = "index.html";
+    };
+
+    socket.onerror = (error) => {
+        console.error("Error en WebSocket:", error);
+    };
+}
+function sendMessageToServer(message) {
+    if (socket.readyState === WebSocket.OPEN) { // Asegúrate de que la conexión está abierta
+        socket.send(JSON.stringify(message)); // Convierte el mensaje en formato JSON y lo envía
+        console.log("Mensaje enviado:", message);
+    } else {
+        console.error("La conexión no está abierta, no se pudo enviar el mensaje.");
+    }
+}
+
+function toggleMiniMode(isMini) {
+    const container = document.querySelector('.container');
+    
+    if (isMini) {
+        // Entrar en modo mini - remover .enter primero para que esté en estado estable (centrado)
+        container.classList.remove('enter');
+        // Forzar reflow para aplicar el cambio
+        void container.offsetHeight;
+        // Ahora agregar .mini para que las transiciones animen del centro al top-right
+        container.classList.add('mini');
+        container.classList.remove('exit');
+        console.log("✅ Ruleta minimizada");
+    } else {
+        // Volver a modo normal - las transiciones CSS harán el trabajo
+        container.classList.remove('mini', 'exit');
+        console.log("❌ Ruleta maximizada");
+    }
+}
+
+// Llamar a connect() para iniciar la conexión
+connect();
+
+
+        function loadImage(url) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+
+        // Resolver cuando la imagen está cargada
+        image.onload = () => resolve(image);
+
+        // Placeholder en caso de error
+        image.onerror = () => {
+            image.src = "https://th.bing.com/th/id/OIP.aiDGdmdUAX_iNgRMERipyQHaHF?rs=1&pid=ImgDetMain"; // Imagen de respaldo
+            console.warn(`No se pudo cargar la imagen desde ${url}. Se usará el placeholder.`);
+            resolve(image); // Resolver con el placeholder en lugar de rechazar
+        };
+
+        // Asignar la URL de la imagen
+        image.src = url;
+    });
+}
+
+
+        // Llamar a la conexión y el dibujo inicial
+        connect();
+        drawWheel();
+
+    </script>
+</body>
+
+</html>

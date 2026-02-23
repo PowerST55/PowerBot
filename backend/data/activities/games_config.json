@@ -1,6 +1,6 @@
 {
   "gamble": {
-    "limit": 150.0,
+    "limit": 3.0,
     "cooldown": 0
   },
   "slots": {

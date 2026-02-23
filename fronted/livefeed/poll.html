@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Poll Winner</title>
+<link rel="stylesheet" href="css/poll.css">
+</head>
+
+<body>
+
+<div class="container">
+<!-- WAITING -->
+<div id="waiting-poll" class="poll-container">
+    <div class="waiting-text">Esperando Encuesta</div>
+    <div class="dots-container">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+    </div>
+</div>
+
+<!-- POLL -->
+<div id="poll-container" class="poll-container">
+    <div class="waiting-text" id="poll-title">Título de la Encuesta</div>
+    <div class="options-container"></div>
+
+    <div id="lifetime-container">
+        <div class="lifeprogress-bar-container">
+            <div id="lifetime-bar" class="lifetime-bar"></div>
+        </div>
+        <div id="time-remaining" class="time-remaining">Tiempo Restante: 0s</div>
+    </div>
+
+    <!-- WINNER -->
+    <div id="winner-overlay" class="winner-overlay">
+        <div class="winner-container">
+            <div class="winner-title">La opción ganadora es:</div>
+            <div class="winner-name">Opción 1</div>
+            <div class="countdown-bar">
+                <div class="countdown-fill"></div>
+            </div>
+        </div>
+    </div>
+</div>
+</div>
+<audio id="winner-sound" src="sounds/poll/winner-poll.mp3"></audio>
+<audio id="join-sound" src="sounds/poll/join-pollvar1.mp3"></audio>
+<audio id="join-soundv2" src="sounds/poll/join-pollvar2.mp3"></audio>
+<audio id="join-soundv3" src="sounds/poll/join-pollvar4.mp3"></audio>
+
+<!-- TU JS ORIGINAL (SIN CAMBIOS) -->
+ <script>
+        const winnerSound = document.getElementById("winner-sound");
+        const joinSoundlist = [
+            document.getElementById("join-sound"),
+            document.getElementById("join-soundv2"),
+            document.getElementById("join-soundv3")
+        ];
+    
+        let animationFinished = false;
+        const socket = new WebSocket("ws://localhost:8765");
+
+socket.addEventListener("open", () => {
+    console.log("Conectado al WebSocket");
+    const container = document.querySelector('.container');
+    container.classList.add('enter');
+    
+    // Marcar que la animación terminó después de 1.6 segundos
+    setTimeout(() => {
+        animationFinished = true;
+        console.log("Animación de entrada finalizada");
+    }, 1600);
+});
+
+const waitingPoll = document.getElementById("waiting-poll");
+const pollContainer = document.getElementById("poll-container");
+const winnerOverlay = document.getElementById("winner-overlay");
+const pollTitle = document.getElementById("poll-title");
+const optionsContainer = document.querySelector(".options-container");
+const winnerName = document.getElementById("winner-name");
+// Referencias al contenedor, barra y texto
+const lifetimeBar = document.getElementById("lifetime-bar");
+const timeRemainingText = document.getElementById("time-remaining");
+
+let pollOptions = [];
+let votes = [];
+
+function showSection(section) {
+    waitingPoll.style.display = "none";
+    pollContainer.style.display = "none";
+    winnerOverlay.style.display = "none";
+    section.style.display = "block";
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    showSection(waitingPoll);
+});
+
+socket.addEventListener("message", (event) => {
+    const data = JSON.parse(event.data);
+    console.log("Mensaje recibido:", data);
+
+    switch (data.type) {
+        case "tittle":
+            updatePollTitle(data.value);
+            //console.log("obvis")
+            break;
+        case "addItem":
+            console.log(data)
+            addOption(data.name);
+            break;
+        case "polltime":
+            console.log(data)
+            startLifetimeBar(data.time);
+            break;
+        case "voteUpdate":
+            vote(data.index-1);
+            break;
+        case "pollEnd":
+            showWinner();
+            break;
+        case "pollReset":
+            resetPoll();
+            break;
+        case "toggle_mini":
+            if (animationFinished) {
+                toggleMiniMode(data.value);
+            } else {
+                console.log("Esperando a que termine la animación de entrada");
+            }
+            break;
+        case "redirect":
+            console.log("Redirigiendo a:", data.url);
+            // Agregar clase de salida y esperar a que termine la animación
+            const containerRedirect = document.querySelector('.container');
+            containerRedirect.classList.add('exit');
+            
+            // Esperar 1.6s (duración de la animación) antes de hacer el redirect
+            setTimeout(() => {
+                window.location.href = data.url;
+            }, 1600);
+            break;
+    }
+});
+
+// Enviar un mensaje al servidor
+function sendMessageToServer(message) {
+    if (socket.readyState === WebSocket.OPEN) { // Asegúrate de que la conexión está abierta
+        socket.send(JSON.stringify(message)); // Convierte el mensaje en formato JSON y lo envía
+        console.log("Mensaje enviado:", message);
+    } else {
+        console.error("La conexión no está abierta, no se pudo enviar el mensaje.");
+    }
+}
+
+
+
+
+
+function updatePollTitle(title) {
+    pollTitle.textContent = title;
+    //optionsContainer.innerHTML = "";
+    //votes = [];
+    ///pollOptions = [];
+    showSection(pollContainer);
+}
+
+// Función para agregar una nueva opción
+function addOption(option) {
+    const index = optionsContainer.children.length;
+
+    votes.push(0); // Inicializar los votos
+    pollOptions.push(option); // Añadir la opción
+
+    const optionDiv = document.createElement("div");
+    optionDiv.className = "option";
+
+    const optionName = document.createElement("div");
+    optionName.className = "option-name";
+    optionName.textContent = `${option} (!v ${index + 1})`; // Identificador para votar
+
+    const progressRow = document.createElement("div");
+    progressRow.className = "progress-row";
+
+    const progressBarContainer = document.createElement("div");
+    progressBarContainer.className = "progress-bar-container";
+
+    const progressBar = document.createElement("div");
+    progressBar.className = "progress-bar";
+    progressBar.id = `progress-bar-${index}`;
+
+    const progressPercentage = document.createElement("div");
+    progressPercentage.className = "progress-percentage";
+    progressPercentage.id = `progress-percentage-${index}`;
+    progressPercentage.textContent = "101%";
+    progressPercentage.style.visibility = "hidden"; // Oculto inicialmente
+
+    // Construir la fila de progreso
+    progressBarContainer.appendChild(progressBar);
+    progressRow.appendChild(progressBarContainer);
+    progressRow.appendChild(progressPercentage);
+
+    optionDiv.appendChild(optionName);
+    optionDiv.appendChild(progressRow);
+
+    // Agregar la opción al contenedor
+    optionsContainer.appendChild(optionDiv);
+}
+
+// Función para votar por una opción
+function vote(optionIndex) {
+    console.log(optionIndex)
+    if (optionIndex < 0 || optionIndex >= votes.length) {
+        console.error("Opción inválida");
+        return;
+    }
+    let selectedSound = joinSoundlist[Math.floor(Math.random() * joinSoundlist.length)]; // Seleccionar sonido aleatorio
+            selectedSound.playbackRate = 0.9 + Math.random() * 1; // Pitch entre 0.9 y 1.2
+            selectedSound.currentTime = 0;
+            selectedSound.play();
+
+    // Incrementar el voto en la opción seleccionada
+    votes[optionIndex]++;
+
+    // Calcular el total de votos
+    const totalVotes = votes.reduce((sum, count) => sum + count, 0);
+
+    // Actualizar todas las barras de progreso y porcentajes
+    votes.forEach((voteCount, i) => {
+        const percentage = totalVotes === 0 ? 0 : Math.round((voteCount / totalVotes) * 100);
+
+        // Actualizar la barra de progreso
+        const progressBar = document.getElementById(`progress-bar-${i}`);
+        const progressPercentage = document.getElementById(`progress-percentage-${i}`);
+
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        
+        if (progressPercentage) {
+            progressPercentage.textContent = `${percentage}%`;
+            progressPercentage.style.visibility = percentage > 0 ? "visible" : "hidden";
+        }
+    });
+}
+function startLifetimeBar(durationInSeconds) {
+    let remainingTime = durationInSeconds; // Tiempo restante en segundos
+    const interval = setInterval(() => {
+        // Calcular el porcentaje restante
+        const percentage = (remainingTime / durationInSeconds) * 100;
+
+        // Actualizar ancho de la barra
+        lifetimeBar.style.width = `${percentage}%`;
+
+        // Cambiar color progresivamente a blanco/gris más claro
+        if (percentage > 50) {
+            lifetimeBar.style.backgroundColor = "#f8f8f8"; // Blanco muy claro
+        } else if (percentage > 20) {
+            lifetimeBar.style.backgroundColor = "#e8e8e8"; // Gris claro
+        } else {
+            lifetimeBar.style.backgroundColor = "#d8d8d8"; // Gris más oscuro
+        }
+
+        // Actualizar el texto del tiempo restante
+        timeRemainingText.textContent = `Tiempo Restante: ${remainingTime}s`;
+
+        // Reducir el tiempo restante
+        remainingTime--;
+
+        // Detener el intervalo cuando el tiempo se agote
+        if (remainingTime < 0) {
+            clearInterval(interval);
+            lifetimeBar.style.width = "0%"; // Vaciar la barra
+            timeRemainingText.textContent = "El Tiempo Se ha agotado";
+            showWinner()
+        }
+    }, 1000); // Actualizar cada segundo
+}
+function showWinner() {
+    const winnerSound = document.getElementById("winner-sound");
+    const winnerIndex = votes.indexOf(Math.max(...votes)); // Encuentra el índice del ganador
+    const totalVotes = votes.reduce((a, b) => a + b, 0); // Total de votos
+    const winnerPercentage = ((votes[winnerIndex] / totalVotes) * 100).toFixed(2); // Porcentaje del ganador
+    const winner = pollOptions[winnerIndex]; // Opción ganadora
+
+    // Elementos necesarios
+    const winnerOverlay = document.getElementById('winner-overlay');
+    const winnerName = winnerOverlay.querySelector('.winner-name');
+    const progressBar = winnerOverlay.querySelector('.countdown-fill');
+
+    if (winnerOverlay && winnerName && progressBar) {
+        // Reproduce el sonido del ganador a velocidad normal sin variación
+        winnerSound.playbackRate = 1.0; // Velocidad normal
+        winnerSound.currentTime = 0; // Reinicia el audio
+        winnerSound.play();
+
+        // Muestra el overlay del ganador
+        winnerOverlay.style.display = "flex"; // Visible
+        winnerName.textContent = `${winner} - ${winnerPercentage}%`; // Actualiza el texto del ganador
+
+        // Anima la barra de cuenta regresiva
+        progressBar.style.animation = 'countdown 7s linear forwards';
+
+        // Después de 7 segundos de mostrar ganador, hacer animación de salida
+        setTimeout(() => {
+            const mensaje = {
+                type: "resetpoll",
+                data: "Resetear ruleta"
+            };
+            sendMessageToServer(mensaje);
+            
+            // Agregar clase de salida para que haga la animación
+            const containerExit = document.querySelector('.container');
+            containerExit.classList.add('exit');
+            
+            // Esperar animación de salida (1.6s) + 4s de delay fuera de pantalla = 5.6s
+            setTimeout(() => {
+                window.location.href = "index.html";
+            }, 5600);
+        }, 7000);  // 7 segundos para mostrar ganador
+    } else {
+        console.error("Elementos faltantes en el DOM"); // Log para depurar en caso de error
+    }
+}
+
+    
+function resetPoll() {
+    showSection(waitingPoll);
+    pollTitle.textContent = "";
+    optionsContainer.innerHTML = "";
+    votes = [];
+    pollOptions = [];
+}
+
+function toggleMiniMode(isMini) {
+    const container = document.querySelector('.container');
+    
+    if (isMini) {
+        // Entrar en modo mini
+        container.classList.add('mini');
+        // Remover la clase enter para que no interfiera
+        container.classList.remove('enter');
+        console.log("✅ Encuesta minimizada");
+    } else {
+        // Volver a modo normal
+        container.classList.remove('mini');
+        // Agregar nuevamente la clase enter para que vuelva al centro sin animación de entrada
+        // (la animación ya pasó, así que solo se aplica el estado final)
+        console.log("❌ Encuesta maximizada");
+    }
+}
+
+socket.onclose = () => {
+    console.warn("WebSocket cerrado, redirigiendo a index.html...");
+    window.location.href = "index.html";
+};
+    </script>
+
+</body>
+</html>

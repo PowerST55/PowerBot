@@ -2,6 +2,7 @@
 Comandos de configuración de YouTube para la consola interactiva.
 """
 
+from .games import apply_youtube_game_settings
 from backend.services.youtube_api.config.economy import get_youtube_economy_config
 
 
@@ -12,10 +13,15 @@ async def cmd_youtube_set(ctx) -> None:
 	Uso:
 	  yt set currency <nombre> <simbolo>
 	  yt set points <amount> <interval_segundos>
+	  yt set gamble <limite> <cooldown_segundos>
+	  yt set slots <limite> <cooldown_segundos>
 	  /set currency <nombre> <simbolo>
 	"""
 	if not ctx.args:
-		ctx.error("Uso: yt set currency <nombre> <simbolo> | yt set points <amount> <interval_segundos>")
+		ctx.error(
+			"Uso: yt set currency <nombre> <simbolo> | yt set points <amount> <interval_segundos> | "
+			"yt set gamble <limite> <cooldown_segundos> | yt set slots <limite> <cooldown_segundos>"
+		)
 		return
 
 	section = ctx.args[0].lower()
@@ -76,9 +82,15 @@ async def cmd_youtube_set(ctx) -> None:
 		ctx.print(f"Intervalo: {economy_config.get_points_interval()} segundos")
 		return
 
+	if section in {"gamble", "slots"}:
+		if apply_youtube_game_settings(ctx, section, ctx.args[1:]):
+			return
+
 	ctx.error(f"Configuración desconocida: '{section}'")
 	ctx.print("Uso disponible: yt set currency <nombre> <simbolo>")
 	ctx.print("Uso disponible: yt set points <amount> <interval_segundos>")
+	ctx.print("Uso disponible: yt set gamble <limite> <cooldown_segundos>")
+	ctx.print("Uso disponible: yt set slots <limite> <cooldown_segundos>")
 
 
 async def cmd_youtube_earning(ctx) -> None:

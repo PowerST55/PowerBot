@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Texto Transparente</title>
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        .texto {
+    font-family: 'Oswald', sans-serif;
+    font-weight: 700;
+    color: white;
+    text-shadow: 
+        2px 2px 4px rgba(0, 0, 0, 0.95),
+        -2px -2px 4px rgba(0, 0, 0, 0.95),
+        2px -2px 4px rgba(0, 0, 0, 0.95),
+        -2px 2px 4px rgba(0, 0, 0, 0.95),
+        0px 0px 8px rgba(0, 0, 0, 0.9),
+        3px 3px 6px rgba(0, 0, 0, 0.85),
+        -3px -3px 6px rgba(0, 0, 0, 0.85);
+    position: absolute;
+    opacity: 0;
+    transition: opacity 4s ease-out;
+    will-change: transform;
+}
+
+    </style>
+</head>
+<body>
+    <script>
+        function createFloatingText(text) {
+    const texto = document.createElement("div");
+    texto.className = "texto";
+    texto.textContent = text;
+    document.body.appendChild(texto);
+
+    // Tamaño aleatorio - AUMENTADO
+    const fontSize = Math.floor(Math.random() * 100) + 120;
+    texto.style.fontSize = `${fontSize}px`;
+
+    // Límites de pantalla
+    const maxWidth = window.innerWidth - 200;
+    const maxHeight = window.innerHeight - 100;
+    const minWidth = 0;
+    const minHeight = 0;
+
+    // Posición inicial aleatoria
+    let x = Math.random() * (maxWidth - minWidth) + minWidth;
+    let y = Math.random() * (maxHeight - minHeight) + minHeight;
+    texto.style.left = `${x}px`;
+    texto.style.top = `${y}px`;
+
+    // Elige un tipo de movimiento aleatorio
+    const movementType = Math.floor(Math.random() * 4); // 0: lineal, 1: rebote, 2: círculo, 3: zigzag
+
+    // Parámetros para los diferentes movimientos
+    const speedX = (Math.random() - 0.5) * 2;
+    const speedY = (Math.random() - 0.5) * 2;
+    const radius = 40 + Math.random() * 60;
+    const angleSpeed = 0.02 + Math.random() * 0.03;
+    let angle = Math.random() * Math.PI * 2;
+    let zigzagDir = 1;
+
+    function animate() {
+        switch (movementType) {
+            case 0: // Lineal
+                x += speedX;
+                y += speedY;
+                break;
+            case 1: // Rebote
+                x += speedX;
+                y += speedY;
+                if (x <= minWidth || x >= maxWidth) zigzagDir *= -1;
+                if (y <= minHeight || y >= maxHeight) zigzagDir *= -1;
+                break;
+            case 2: // Círculo
+                angle += angleSpeed;
+                x += Math.cos(angle) * 2;
+                y += Math.sin(angle) * 2;
+                break;
+            case 3: // Zigzag
+                x += speedX * zigzagDir;
+                y += speedY;
+                if (x <= minWidth || x >= maxWidth) zigzagDir *= -1;
+                break;
+        }
+        // Mantener dentro de pantalla
+        x = Math.max(minWidth, Math.min(x, maxWidth));
+        y = Math.max(minHeight, Math.min(y, maxHeight));
+        texto.style.left = `${x}px`;
+        texto.style.top = `${y}px`;
+        requestAnimationFrame(animate);
+    }
+
+    texto.style.opacity = "1";
+    animate();
+
+    // Desvanecer y eliminar después de 4s
+    setTimeout(() => {
+        texto.style.opacity = "0";
+        setTimeout(() => texto.remove(), 4000);
+    }, 4000);
+}
+
+        function connect() {
+            const socket = new WebSocket("ws://localhost:8765");
+            socket.onopen = () => console.log("Conectado al WebSocket");
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === "texthubadd") {
+                    createFloatingText(data.text);
+                }
+                if (data.type === "redirect") {
+                    console.log("Redirigiendo a:", data.url);
+                    window.location.href = data.url; // Redirige a la nueva página
+                }
+            };
+            
+            socket.onclose = () => {
+                console.log("Desconectado del WebSocket, redirigiendo...");
+                window.location.href = "index.html";
+            };
+        }
+
+        connect();
+    </script>
+</body>
+</html>

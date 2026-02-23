@@ -132,6 +132,21 @@ async def cmd_help(ctx: CommandContext) -> None:
 	ctx.print("                   • web on         - Enciende servidor web")
 	ctx.print("                   • web off        - Apaga servidor web")
 	ctx.print("                   • web status     - Estado del servidor web")
+	ctx.print("                   • web autorun    - Alterna arranque automático")
+	ctx.print("  livefeed <subcmd>- Autoriza/rechaza acceso por IP")
+	ctx.print("                   • livefeed status - Ver solicitud pendiente")
+	ctx.print("                   • livefeed allow  - Autorizar última solicitud")
+	ctx.print("                   • livefeed deny   - Rechazar última solicitud")
+	ctx.print("  wsocket <subcmd>- Control del servidor websocket local")
+	ctx.print("                   • wsocket        - Alterna ON/OFF")
+	ctx.print("                   • wsocket autorun- Alterna arranque automático")
+	ctx.print("                   • wsocket status - Estado actual")
+	ctx.print("  discord <subcmd>- Control del bot de Discord")
+	ctx.print("                   • discord        - Alterna ON/OFF")
+	ctx.print("                   • discord on     - Enciende bot de Discord")
+	ctx.print("                   • discord off    - Apaga bot de Discord")
+	ctx.print("                   • discord status - Estado del bot de Discord")
+	ctx.print("                   • discord autorun- Alterna arranque automático")
 	ctx.print("  say <msg>      - Envia un mensaje a YouTube Live")
 	ctx.print("  yapi           - 🚀 Conecta YouTube e inicia listener (TODO EN UNO)")
 	ctx.print("  yt <subcmd>    - Comandos de YouTube API")
@@ -141,6 +156,8 @@ async def cmd_help(ctx: CommandContext) -> None:
 	ctx.print("                   • yt logout       - Cierra sesión y borra token")
 	ctx.print("                   • yt status       - Estado de YouTube")
 	ctx.print("                   • yt set currency - Configura moneda de YouTube")
+	ctx.print("                   • yt set gamble   - Configura límite/cooldown de gamble")
+	ctx.print("                   • yt set slots    - Configura límite/cooldown de slots")
 	ctx.print("                   • yt help         - Ayuda de YouTube")
 	ctx.print("  help           - Muestra esta ayuda")
 	ctx.print("  exit           - Salir del programa")
@@ -218,6 +235,24 @@ async def cmd_web(ctx: CommandContext) -> None:
 	await cmd_web_impl(ctx)
 
 
+async def cmd_wsocket(ctx: CommandContext) -> None:
+	"""Comando wsocket - ejecuta subcomandos para websocket local."""
+	from .websocket.general import cmd_wsocket as cmd_wsocket_impl
+	await cmd_wsocket_impl(ctx)
+
+
+async def cmd_discord(ctx: CommandContext) -> None:
+	"""Comando discord - ejecuta subcomandos para controlar el bot de Discord."""
+	from .discord_bot.general import cmd_discord as cmd_discord_impl
+	await cmd_discord_impl(ctx)
+
+
+async def cmd_livefeed(ctx: CommandContext) -> None:
+	"""Comando livefeed - gestiona whitelist de IP para livefeed."""
+	from .web.livefeed.ip_whitelist import cmd_livefeed as cmd_livefeed_impl
+	await cmd_livefeed_impl(ctx)
+
+
 async def cmd_say(ctx: CommandContext) -> None:
 	"""Comando say - envia un mensaje a YouTube Live."""
 	from .youtube.general import _get_listener, _get_youtube
@@ -263,6 +298,9 @@ _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
 	"youtube": cmd_yt,
 	"yapi": cmd_yapi,
 	"web": cmd_web,
+	"discord": cmd_discord,
+	"livefeed": cmd_livefeed,
+	"wsocket": cmd_wsocket,
 	"help": cmd_help,
 	"exit": cmd_exit,
 }

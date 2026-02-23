@@ -9,6 +9,14 @@ from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.services.web.livefeed import (
+	is_livefeed_authorized,
+	is_livefeed_path,
+	register_pending_request,
+	waiting_authorization_response,
+)
+from backend.services.web.economy.top_packager import get_top10_payload
+
 app = FastAPI(title="PowerBot Web", version="1.0.0")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -28,6 +36,32 @@ def _resolve_index_path() -> Path | None:
 		if not path.is_absolute():
 			path = PROJECT_ROOT / candidate
 		if path.exists() and path.is_file():
+			return path
+	return None
+
+
+def _resolve_pages_dir() -> Path | None:
+	"""Resuelve carpeta de páginas estáticas (fronted/pages o frontend/pages)."""
+	candidates = [
+		PROJECT_ROOT / "fronted" / "pages",
+		PROJECT_ROOT / "frontend" / "pages",
+	]
+
+	for path in candidates:
+		if path.exists() and path.is_dir():
+			return path
+	return None
+
+
+def _resolve_livefeed_dir() -> Path | None:
+	"""Resuelve carpeta del livefeed estático."""
+	candidates = [
+		PROJECT_ROOT / "fronted" / "livefeed",
+		PROJECT_ROOT / "frontend" / "livefeed",
+	]
+
+	for path in candidates:
+		if path.exists() and path.is_dir():
 			return path
 	return None
 
@@ -82,6 +116,24 @@ def _mount_static_dirs() -> None:
 _mount_static_dirs()
 
 
+@app.middleware("http")
+async def livefeed_whitelist_middleware(request, call_next):
+	path = str(request.url.path or "")
+	if not is_livefeed_path(path):
+		return await call_next(request)
+
+	authorized, client_ip = is_livefeed_authorized(request)
+	if authorized:
+		return await call_next(request)
+
+	register_pending_request(client_ip, path)
+	print(
+		f"[LIVEFEED_PENDING] Esperando autorización IP={client_ip} path={path}. "
+		f"Usa: livefeed allow | livefeed deny"
+	)
+	return waiting_authorization_response()
+
+
 @app.get("/", response_model=None)
 async def root() -> Response:
 	index_file = _resolve_index_path()
@@ -94,6 +146,54 @@ async def root() -> Response:
 			"message": "No se encontró index.html. Define WEB_INDEX_FILE o usa /health.",
 		}
 	)
+
+
+@app.get("/pages/{page_name}", response_model=None)
+async def page_file(page_name: str) -> Response:
+	if "/" in page_name or "\\" in page_name or ".." in page_name:
+		return JSONResponse({"ok": False, "error": "page_name invalido"}, status_code=400)
+
+	pages_dir = _resolve_pages_dir()
+	if not pages_dir:
+		return JSONResponse({"ok": False, "error": "Carpeta de paginas no encontrada"}, status_code=404)
+
+	page_path = pages_dir / page_name
+	if not page_path.exists() or not page_path.is_file():
+		return JSONResponse({"ok": False, "error": "Pagina no encontrada"}, status_code=404)
+
+	return FileResponse(page_path)
+
+
+@app.get("/pages.top.html", response_model=None)
+async def top_page_compat() -> Response:
+	return await page_file("top.html")
+
+
+@app.get("/livefeed", response_model=None)
+@app.get("/livefeed/", response_model=None)
+async def livefeed_root() -> Response:
+	return await livefeed_file("main.html")
+
+
+@app.get("/livefeed/{file_path:path}", response_model=None)
+async def livefeed_file(file_path: str) -> Response:
+	if ".." in file_path or file_path.startswith("/") or "\\" in file_path:
+		return JSONResponse({"ok": False, "error": "file_path invalido"}, status_code=400)
+
+	livefeed_dir = _resolve_livefeed_dir()
+	if not livefeed_dir:
+		return JSONResponse({"ok": False, "error": "Carpeta livefeed no encontrada"}, status_code=404)
+
+	target = livefeed_dir / file_path
+	if not target.exists() or not target.is_file():
+		return JSONResponse({"ok": False, "error": "Archivo livefeed no encontrado"}, status_code=404)
+
+	return FileResponse(target)
+
+
+@app.get("/api/economy/top10")
+async def economy_top10() -> dict:
+	return get_top10_payload(limit=10)
 
 
 @app.get("/health")

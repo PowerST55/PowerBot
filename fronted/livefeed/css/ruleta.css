@@ -1,0 +1,298 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+
+body {
+    font-family: 'Poppins', sans-serif;
+    text-align: center;
+    background-color: #f7f3e9;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.5s;
+}
+
+.container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* Transición suave para transform, posición y opacity */
+    transition: transform 0.45s ease, top 0.45s ease, right 0.45s ease, left 0.45s ease;
+    will-change: transform, top, right, left;
+}
+
+.enter {
+    animation: enter 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    transition: none !important;
+}
+
+@keyframes enter {
+    0% {
+        transform: translate(-50%, -150vh) scale(0.1);
+        opacity: 0;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+    }
+}
+
+.exit {
+    animation: exit 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards !important;
+    transition: none !important;
+}
+
+@keyframes exit {
+    0% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(-50%, -150vh) scale(0.1);
+        opacity: 0;
+    }
+}
+
+/* ========================= */
+/* MODO MINI */
+/* ========================= */
+.container.mini {
+    position: fixed;
+    top: 14px;
+    right: 22px;
+    left: auto;
+    transform: scale(0.45);
+    transform-origin: top right;
+}
+
+/* Animación de salida desde modo mini */
+.container.mini.exit {
+    animation: exitMini 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards !important;
+    position: fixed;
+    transform-origin: top right;
+}
+
+@keyframes exitMini {
+    0% {
+        transform: scale(0.45);
+        opacity: 1;
+    }
+    40% {
+        transform: scale(0.55);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(0, -150vh) scale(0.1);
+        opacity: 0;
+    }
+}
+
+.wheel-container {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+canvas {
+    width: min(62vw, 519px);
+    height: min(62vw, 519px);
+    border-radius: 50%;
+    background-color: #fff;
+    border: 5px solid white;
+    box-shadow: 0 0 0 15px #240522;
+    position: relative;
+    z-index: 1;
+}
+
+.selector {
+    position: absolute;
+    top: -21px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 34px solid transparent;
+    border-right: 34px solid transparent;
+    border-top: 44px solid red;
+    z-index: 2;
+}
+
+.overlay-background {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.92);
+    /* Fondo oscuro más intenso */
+    display: none;
+    /* Oculto por defecto */
+    z-index: 9998;
+    /* Debajo del overlay principal */
+    backdrop-filter: blur(3px);
+    animation: fadeInOverlay 0.3s ease-in-out forwards;
+}
+
+@keyframes fadeInOverlay {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+#winner-overlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(62vw, 519px);
+    height: min(62vw, 519px);
+    background: linear-gradient(135deg, #0f0f35 0%, #1a0f40 50%, #07071a 100%);
+    padding: 34px;
+    border-radius: 30px;
+    text-align: center;
+    display: none;
+    font-family: 'Oswald', sans-serif;
+    z-index: 9999;
+    border: 3px solid rgba(255, 255, 255, 0.8);
+    box-shadow:
+        0 0 0 8px rgba(255, 255, 255, 0.1),
+        0 40px 100px rgba(0, 0, 0, 0.95),
+        inset 0 0 50px rgba(120, 100, 255, 0.2),
+        inset 0 0 80px rgba(76, 175, 200, 0.1);
+    animation: popIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+@keyframes popIn {
+    0% {
+        transform: translate(-50%, -50%) scale(0.5);
+        opacity: 0;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.05);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+    }
+}
+
+#winner-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}
+
+#winner-title {
+    font-size: clamp(1.5rem, 2.8vw, 2.2rem);
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: white;
+    text-shadow: 0 4px 15px rgba(0, 0, 0, 0.8);
+    letter-spacing: 1px;
+}
+
+.winner-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    margin-bottom: 28px;
+    flex-direction: column;
+}
+
+#winner-image {
+    width: clamp(100px, 16vw, 140px);
+    height: clamp(100px, 16vw, 140px);
+    border-radius: 50%;
+    border: 5px solid white;
+    box-shadow:
+        0 0 0 8px rgba(76, 175, 200, 0.4),
+        0 20px 50px rgba(0, 0, 0, 0.7);
+    object-fit: cover;
+    animation: imageEnter 0.6s ease-out 0.1s backwards;
+}
+
+@keyframes imageEnter {
+    from {
+        transform: scale(0.3);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+#winner-name {
+    font-size: clamp(2rem, 5.6vw, 3rem);
+    font-weight: 700;
+    color: white;
+    line-height: 1.1;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.9);
+    letter-spacing: 2px;
+    animation: nameEnter 0.7s ease-out 0.2s backwards;
+}
+
+@keyframes nameEnter {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.progress-container {
+    width: 100%;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+.progress-bar {
+    height: 16px;
+    background: linear-gradient(90deg, #76c7c0, #4cafc8);
+    width: 100%;
+    animation: progress-animation 5s linear forwards;
+    box-shadow: 0 0 15px rgba(76, 175, 200, 0.6);
+}
+
+@keyframes progress-animation {
+    from {
+        width: 100%;
+    }
+
+    to {
+        width: 0;
+    }
+}
+
+.text {
+    position: absolute;
+    text-align: center;
+    width: 100%;
+    font-size: 16px;
+    color: white;
+    font-weight: bold;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+}

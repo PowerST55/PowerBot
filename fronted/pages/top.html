@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Top 10 Usuarios</title>
+
+<style>
+/* ========================= */
+/* RESET */
+/* ========================= */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+    color: white;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* ========================= */
+/* CONTENEDOR PRINCIPAL */
+/* ========================= */
+.leaderboard {
+    width: 900px;
+    max-width: 95%;
+    background: rgba(15, 23, 42, 0.9);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 30px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+.leaderboard h1 {
+    text-align: center;
+    margin-bottom: 25px;
+    font-size: 28px;
+    letter-spacing: 1px;
+}
+
+.top-actions {
+    display: flex;
+    justify-content: flex-start;
+    margin-bottom: 14px;
+}
+
+.back-btn {
+    display: inline-block;
+    text-decoration: none;
+    color: #e2e8f0;
+    background: rgba(56, 189, 248, 0.15);
+    border: 1px solid rgba(56, 189, 248, 0.45);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    transition: 0.2s ease;
+}
+
+.back-btn:hover {
+    background: rgba(56, 189, 248, 0.25);
+}
+
+/* ========================= */
+/* HEADER COLUMNAS */
+/* ========================= */
+.header-row {
+    display: grid;
+    grid-template-columns: 60px 80px 1fr 120px 200px;
+    align-items: center;
+    padding: 10px 15px;
+    font-size: 14px;
+    opacity: 0.7;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ========================= */
+/* FILA USUARIO */
+/* ========================= */
+.user-row {
+    display: grid;
+    grid-template-columns: 60px 80px 1fr 120px 200px;
+    align-items: center;
+    padding: 15px;
+    margin-top: 10px;
+    background: rgba(30, 41, 59, 0.8);
+    border-radius: 12px;
+    transition: 0.2s ease;
+}
+
+.user-row:hover {
+    transform: translateY(-2px);
+    background: rgba(51, 65, 85, 0.9);
+}
+
+/* POSICIÓN */
+.rank {
+    font-weight: bold;
+    font-size: 18px;
+    text-align: center;
+}
+
+.col-rank,
+.col-avatar,
+.col-currency {
+    text-align: center;
+}
+
+.col-user,
+.col-platform {
+    text-align: left;
+}
+
+/* AVATAR */
+.avatar img {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(255,255,255,0.2);
+}
+
+/* ID */
+.user-id {
+    font-size: 13px;
+    opacity: 0.8;
+}
+
+/* USERNAME */
+.username {
+    font-weight: 600;
+    font-size: 15px;
+}
+
+/* PUNTOS */
+.points {
+    font-weight: bold;
+    font-size: 16px;
+    text-align: center;
+    color: #38bdf8;
+}
+
+/* PLATAFORMAS */
+.platforms {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.platform-tag {
+    background: rgba(56, 189, 248, 0.15);
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+/* ========================= */
+/* SCROLL SI EXCEDE 10 */
+/* ========================= */
+.user-list {
+    max-height: 500px;
+    overflow-y: auto;
+    padding-right: 5px;
+}
+
+.user-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.user-list::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+    border-radius: 10px;
+}
+
+.empty-state {
+    text-align: center;
+    opacity: 0.8;
+    padding: 25px 10px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="leaderboard">
+    <div class="top-actions">
+        <a class="back-btn" href="/">← Volver al inicio</a>
+    </div>
+    <h1>🏆 TOP 10 USUARIOS</h1>
+
+    <div class="header-row">
+        <div class="col-rank">#</div>
+        <div class="col-avatar">Avatar</div>
+        <div class="col-user">ID Universal / Usuario</div>
+        <div class="col-currency">pews</div>
+        <div class="col-platform">Plataformas</div>
+    </div>
+
+    <div class="user-list" id="userList">
+        <div class="empty-state">Cargando top 10...</div>
+
+    </div>
+</div>
+
+<script>
+const userList = document.getElementById('userList');
+const titleEl = document.querySelector('.leaderboard h1');
+const pointsHeaderEl = document.querySelector('.header-row > div:nth-child(4)');
+const avatarPlaceholder = '/media/items/avatar_placeholder.png';
+
+const defaultCurrency = {
+    name: 'pews',
+    symbol: '💎',
+};
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function renderTop(items, currency = defaultCurrency) {
+    const currencyName = escapeHtml(currency?.name || defaultCurrency.name);
+    const currencySymbol = escapeHtml(currency?.symbol || defaultCurrency.symbol);
+
+    if (titleEl) {
+        titleEl.textContent = `🏆 TOP 10 USUARIOS · ${currencyName}`;
+    }
+    if (pointsHeaderEl) {
+        pointsHeaderEl.textContent = currencyName;
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+        userList.innerHTML = '<div class="empty-state">No hay datos disponibles en el ranking.</div>';
+        return;
+    }
+
+    const html = items.map((user) => {
+        const rank = Number(user.rank || 0);
+        const userId = escapeHtml(user.user_id ?? 'N/A');
+        const username = escapeHtml(user.display_name || user.username || 'Sin nombre');
+        const points = Number(user.balance || 0).toLocaleString('es-ES', {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+        });
+        const avatar = user.avatar_url || avatarPlaceholder;
+        const platforms = Array.isArray(user.platforms) && user.platforms.length > 0
+            ? user.platforms.map((name) => `<div class="platform-tag">${escapeHtml(name)}</div>`).join('')
+            : '<div class="platform-tag">N/A</div>';
+
+        return `
+            <div class="user-row">
+                <div class="rank col-rank">${rank}</div>
+                <div class="avatar col-avatar">
+                    <img src="${escapeHtml(avatar)}" alt="avatar de ${username}">
+                </div>
+                <div class="col-user">
+                    <div class="user-id">ID: ${userId}</div>
+                    <div class="username">${username}</div>
+                </div>
+                <div class="points col-currency">${points} ${currencySymbol}</div>
+                <div class="platforms col-platform">${platforms}</div>
+            </div>
+        `;
+    }).join('');
+
+    userList.innerHTML = html;
+
+    userList.querySelectorAll('.avatar img').forEach((img) => {
+        img.addEventListener('error', () => {
+            if (!img.src.endsWith('/media/items/avatar_placeholder.png')) {
+                img.src = avatarPlaceholder;
+            }
+        }, { once: true });
+    });
+}
+
+async function loadTop() {
+    try {
+        const response = await fetch('/api/economy/top10', { cache: 'no-store' });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        renderTop(payload.items || [], payload.currency || defaultCurrency);
+    } catch (error) {
+        userList.innerHTML = '<div class="empty-state">Error cargando el top 10.</div>';
+    }
+}
+
+loadTop();
+</script>
+
+</body>
+</html>

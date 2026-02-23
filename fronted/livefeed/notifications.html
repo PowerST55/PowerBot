@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notificaciones Automáticas</title>
+    <link rel="stylesheet" href="css/notifications.css">
+    <link rel="stylesheet" href="css/video-notifications.css">
+    <link rel="stylesheet" href="css/codes.css">
+</head>
+<body>
+    <!-- Plantilla para notificación estilo 1 -->
+    <audio id="notification-sound" src="sounds/notification/notification.wav" preload="auto"></audio>
+
+    <template id="template-style1">
+        <div class="notification-box style-1">
+            <div class="notification-title"></div>
+            <div class="notification-message"></div>
+        </div>
+    </template>
+
+    <!-- Plantilla para notificación estilo 2 -->
+    <template id="template-style2">
+        <div class="notification-box style-2">
+            <div class="upper-container">
+                <img class="profile-image" src="" alt="Perfil">
+                <div class="notification-title"></div>
+            </div>
+            <div class="notification-message"></div>
+        </div>
+    </template>
+
+    <div id="notifications-root"></div>
+    <div id="video-container">
+        <video id="notification-video" playsinline autoplay></video>
+    </div>
+    <div id="code-display"></div>
+
+    <script>
+        const notificationsContainer = [];
+        const maxNotifications = 4;
+        const storePath = 'store';
+        const notificationCatalog = {}; // Almacenar configuraciones cargadas
+        const notificationQueue = []; // Cola de notificaciones pendientes
+        let isPlayingNotification = false; // Flag para saber si se está reproduciendo una notificación
+        
+        // --- VARIABLES PARA CÓDIGOS ---
+        let activeCode = null;
+        let codeElement = null;
+        let codeTimeout = null;
+        let codeBlinkInterval = null;
+        let animationFrameId = null; // Variable global para la animación
+        const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2'];
+        let colorIndex = 0;
+
+        function ensureRoot() {
+            let root = document.getElementById('notifications-root');
+            if (!root) {
+                root = document.createElement('div');
+                root.id = 'notifications-root';
+                document.body.appendChild(root);
+            }
+            return root;
+        }
+
+        // Cargar el catálogo dinámicamente desde store/
+        async function loadNotificationCatalog() {
+            try {
+                console.log('🔄 Iniciando carga del catálogo...');
+                const response = await fetch(`${storePath}/manifest.json`);
+                if (!response.ok) {
+                    console.error('❌ manifest.json no encontrado. Status:', response.status);
+                    console.error('   Crea un archivo store/manifest.json con: {"version": "1.0", "notifications": ["hijodelamaraca"]}');
+                    return;
+                }
+
+                const manifest = await response.json();
+                console.log('📋 Manifest cargado:', manifest);
+
+                if (!manifest.notifications || manifest.notifications.length === 0) {
+                    console.warn('⚠ El manifest no contiene notificaciones');
+                    return;
+                }
+
+                for (const notificationId of manifest.notifications) {
+                    try {
+                        console.log(`  📦 Cargando: ${notificationId}...`);
+                        const configResponse = await fetch(`${storePath}/${notificationId}/config.json`);
+                        if (configResponse.ok) {
+                            const config = await configResponse.json();
+                            notificationCatalog[notificationId] = {
+                                ...config,
+                                videoPath: `${storePath}/${notificationId}/video.mp4`
+                            };
+                            console.log(`  ✓ ${notificationId} cargado`);
+                        } else {
+                            console.error(`  ❌ config.json no encontrado para: ${notificationId} (Status: ${configResponse.status})`);
+                        }
+                    } catch (error) {
+                        console.error(`  ❌ Error cargando ${notificationId}:`, error);
+                    }
+                }
+
+                console.log('🎬 Catálogo completo:', notificationCatalog);
+                console.log(`   Total notificaciones cargadas: ${Object.keys(notificationCatalog).length}`);
+            } catch (error) {
+                console.error('❌ Error cargando catálogo:', error);
+            }
+        }
+
+        // Reproducir video de notificación
+        async function playNotificationVideo(notifId) {
+            try {
+                const config = notificationCatalog[notifId];
+                if (!config || !config.videoPath) {
+                    console.warn(`❌ Video no encontrado para: ${notifId}`);
+                    return 0;
+                }
+
+                const videoElement = document.getElementById('notification-video');
+                const videoContainer = document.getElementById('video-container');
+
+                videoElement.src = config.videoPath;
+                videoContainer.classList.remove('hide'); // Remover clase hide si existe
+                videoContainer.style.display = 'block';
+
+                // Esperar a que el video cargue para obtener la duración
+                return new Promise((resolve) => {
+                    const handleLoadedMetadata = () => {
+                        const duration = videoElement.duration * 1000; // convertir a ms
+                        console.log(`▶ Reproduciendo video: ${notifId} (${(duration/1000).toFixed(2)}s)`);
+                        videoElement.play().catch(err => console.warn('Error reproduciendo video:', err));
+
+                        // Ocultar video cuando termine
+                        const handleEnded = () => {
+                            videoContainer.classList.add('hide');
+                            setTimeout(() => {
+                                videoContainer.style.display = 'none';
+                            }, 300);
+                            videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
+                            videoElement.removeEventListener('ended', handleEnded);
+                            resolve(duration);
+                        };
+
+                        videoElement.addEventListener('ended', handleEnded);
+                    };
+
+                    const handleError = () => {
+                        console.error(`❌ Error cargando video: ${config.videoPath}`);
+                        console.error('   Verifica que el archivo video.mp4 existe en la carpeta');
+                        videoContainer.classList.add('hide');
+                        setTimeout(() => {
+                            videoContainer.style.display = 'none';
+                        }, 300);
+                        videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
+                        videoElement.removeEventListener('error', handleError);
+                        resolve(0);
+                    };
+
+                    videoElement.addEventListener('loadedmetadata', handleLoadedMetadata);
+                    videoElement.addEventListener('error', handleError);
+                });
+            } catch (error) {
+                console.error('Error reproduciendo video:', error);
+                return 0;
+            }
+        }
+
+        // Mostrar notificación dinámica (sin catálogo)
+        function showDynamicNotification(data) {
+            const caseType = data.caseType || 1;
+            const templateName = caseType === 2 ? 'style2' : 'style1';
+            const template = document.getElementById(`template-${templateName}`);
+            
+            if (!template) {
+                console.error(`❌ Template no encontrado: template-${templateName}`);
+                return;
+            }
+            
+            const notificationElement = template.content.cloneNode(true).querySelector('.notification-box');
+            
+            // Aplicar datos
+            const titleElement = notificationElement.querySelector('.notification-title');
+            const messageElement = notificationElement.querySelector('.notification-message');
+            
+            if (titleElement && data.titleText) titleElement.textContent = data.titleText;
+            if (messageElement && data.messageText) messageElement.textContent = data.messageText;
+            
+            // Si es style2, aplicar imagen de perfil
+            if (templateName === 'style2' && data.profileImage) {
+                const profileImg = notificationElement.querySelector('.profile-image');
+                if (profileImg) {
+                    profileImg.src = data.profileImage.src || data.profileImage;
+                    profileImg.alt = data.profileImage.alt || 'Perfil';
+                }
+            }
+            
+            console.log(`✓ Notificación dinámica creada (${templateName}) - Título: "${data.titleText}", Mensaje: "${data.messageText}"`);
+            
+            // Mostrar
+            const root = ensureRoot();
+            root.appendChild(notificationElement);
+            setTimeout(() => notificationElement.classList.add('show'), 60);
+            notificationsContainer.unshift(notificationElement);
+            
+            // Limitar cantidad
+            if (notificationsContainer.length > maxNotifications) {
+                const oldNotif = notificationsContainer.pop();
+                oldNotif.classList.remove('show');
+                setTimeout(() => oldNotif.remove(), 260);
+            }
+            
+            // Auto-remover después de 4 segundos
+            setTimeout(() => {
+                notificationElement.classList.remove('show');
+                setTimeout(() => notificationElement.remove(), 260);
+            }, 4000);
+        }
+
+        async function nuevaNotificacion(notifId, data = {}) {
+            const config = notificationCatalog[notifId];
+            if (!config) {
+                console.error(`❌ Notificación no encontrada: "${notifId}"`);
+                console.error('   IDs disponibles en catálogo:', Object.keys(notificationCatalog));
+                console.error('   Datos recibidos:', data);
+                console.error('   💡 Asegúrate de que:');
+                console.error('      1. El ID existe en store/manifest.json');
+                console.error('      2. El backend envía el ID correcto (item_id del item de la tienda)');
+                return;
+            }
+
+            console.log(`📢 Mostrando notificación: ${notifId}`, 'Config:', config, 'Data:', data);
+
+            // Mostrar la notificación PRIMERO (si hay template)
+            let notificationElement = null;
+            if (config.template) {
+                const templateId = `template-${config.template}`;
+                const template = document.getElementById(templateId);
+                if (template) {
+                    notificationElement = template.content.cloneNode(true).querySelector('.notification-box');
+
+                    // Priorizar datos dinámicos (data) sobre config
+                    const titleText = data.titleText || config.titleText || '';
+                    const messageText = data.messageText || config.messageText || '';
+                    
+                    // Aplicar textos
+                    const titleElement = notificationElement.querySelector('.notification-title');
+                    const messageElement = notificationElement.querySelector('.notification-message');
+                    
+                    if (titleElement) titleElement.textContent = titleText;
+                    if (messageElement) messageElement.textContent = messageText;
+                    
+                    // Para style-2, manejar imagen de perfil
+                    if (config.template === 'style2') {
+                        const profileImg = notificationElement.querySelector('.profile-image');
+                        if (profileImg && data.profileImage) {
+                            profileImg.src = data.profileImage.src || data.profileImage;
+                            profileImg.alt = data.profileImage.alt || 'Perfil';
+                        }
+                    }
+
+                    console.log(`✓ Notificación creada - Título: "${titleText}", Mensaje: "${messageText}"`);
+
+                    const root = ensureRoot();
+                    root.appendChild(notificationElement);
+                    setTimeout(() => notificationElement.classList.add('show'), 60);
+                    notificationsContainer.unshift(notificationElement);
+
+                    // Garantizar límite de notificaciones simultáneas
+                    if (notificationsContainer.length > maxNotifications) {
+                        const oldNotif = notificationsContainer.pop();
+                        oldNotif.classList.remove('show');
+                        setTimeout(() => oldNotif.remove(), 260);
+                    }
+                } else {
+                    console.warn(`⚠ Template no encontrado: ${templateId}`);
+                }
+            } else {
+                console.warn(`⚠ No hay template definido en config para: ${notifId}`);
+            }
+
+            // Reproducir video (al mismo tiempo que la notificación)
+            const videoDuration = await playNotificationVideo(notifId);
+            
+            // Auto-remover la notificación basado en duración del video (o 4200ms por defecto)
+            if (notificationElement) {
+                const duration = videoDuration || 4200;
+                setTimeout(() => {
+                    notificationElement.classList.remove('show');
+                    setTimeout(() => notificationElement.remove(), 260);
+                }, duration);
+            }
+        }
+
+        // Procesar cola de notificaciones
+        async function processNotificationQueue() {
+            if (notificationQueue.length === 0) {
+                isPlayingNotification = false;
+                return;
+            }
+
+            isPlayingNotification = true;
+            const nextNotification = notificationQueue.shift();
+            
+            console.log(`📋 Procesando notificación de la cola: ${nextNotification.notifId} (Pendientes: ${notificationQueue.length})`);
+            
+            await nuevaNotificacion(nextNotification.notifId, nextNotification.data);
+            
+            // Esperar un poco antes de procesar la siguiente
+            setTimeout(processNotificationQueue, 500);
+        }
+
+        // Manejar notificación entrante
+        function handleIncomingNotification(notifId, data = {}) {
+            // Agregar a la cola
+            notificationQueue.push({ notifId, data });
+            console.log(`⏳ Notificación en cola: ${notifId} (Total en cola: ${notificationQueue.length})`);
+
+            // Si no hay notificación reproduciéndose, iniciar el procesamiento
+            if (!isPlayingNotification) {
+                processNotificationQueue();
+            }
+        }
+
+        // --- FUNCIONES PARA CÓDIGOS RECOMPENSABLES ---
+        function showCode(code, duration, blink_start) {
+            removeCode(); // Remover código anterior si existe
+            
+            activeCode = code;
+            console.log(`🎁 Mostrando código: ${code} (Válido por ${duration}s)`);
+            
+            const container = document.getElementById('code-display');
+            codeElement = document.createElement('div');
+            codeElement.className = 'code-element';
+            codeElement.textContent = code;
+            codeElement.style.color = colors[0];
+            container.appendChild(codeElement);
+            
+            // Calcular ancho aproximado del código (44px font-size + letter-spacing)
+            const codeWidth = code.length * 30; // Aproximado: 30px por carácter
+            const codeHeight = 54; // Altura aproximada del texto
+            
+            // Posición inicial aleatoria DENTRO de los límites visibles
+            const maxX = Math.max(100, window.innerWidth - codeWidth - 50);
+            const maxY = Math.max(100, window.innerHeight - codeHeight - 50);
+            let x = 50 + Math.random() * (maxX - 50);
+            let y = 50 + Math.random() * (maxY - 50);
+            codeElement.style.left = `${x}px`;
+            codeElement.style.top = `${y}px`;
+            
+            // Velocidad aleatoria más sutil
+            let speedX = (Math.random() - 0.5) * 1.2;
+            let speedY = (Math.random() - 0.5) * 1.2;
+            
+            let timeLeft = duration;
+            let isBlinking = false;
+            let colorChangeCounter = 0;
+            
+            // Animación de movimiento continuo
+            const animateCode = () => {
+                if (!codeElement || !codeElement.parentNode) {
+                    return; // Detener si el elemento fue removido
+                }
+                
+                x += speedX;
+                y += speedY;
+                
+                // Calcular límites dinámicos
+                const codeWidth = code.length * 30;
+                const codeHeight = 54;
+                const minX = 20;
+                const minY = 20;
+                const maxX = window.innerWidth - codeWidth - 20;
+                const maxY = window.innerHeight - codeHeight - 20;
+                
+                // Rebotar en los bordes con suavidad
+                if (x <= minX || x >= maxX) {
+                    speedX = -speedX;
+                    x = Math.max(minX, Math.min(x, maxX)); // Corregir posición
+                }
+                if (y <= minY || y >= maxY) {
+                    speedY = -speedY;
+                    y = Math.max(minY, Math.min(y, maxY)); // Corregir posición
+                }
+                
+                // Asegurar que siempre esté dentro de los límites
+                x = Math.max(minX, Math.min(x, maxX));
+                y = Math.max(minY, Math.min(y, maxY));
+                
+                codeElement.style.left = `${x}px`;
+                codeElement.style.top = `${y}px`;
+                
+                // Cambiar color cada 30 frames (más suave)
+                colorChangeCounter++;
+                if (colorChangeCounter >= 30 && !isBlinking) {
+                    colorIndex = (colorIndex + 1) % colors.length;
+                    codeElement.style.color = colors[colorIndex];
+                    colorChangeCounter = 0;
+                }
+                
+                animationFrameId = requestAnimationFrame(animateCode);
+            };
+            
+            animateCode();
+            
+            // Iniciar parpadeo en los últimos 30 segundos
+            const blinkStartTime = (duration - blink_start) * 1000;
+            setTimeout(() => {
+                isBlinking = true;
+                console.log(`⏳ Código parpadeando... (${blink_start}s restantes)`);
+                codeBlinkInterval = setInterval(() => {
+                    codeElement.style.opacity = codeElement.style.opacity === '0' ? '1' : '0';
+                }, 300);
+            }, blinkStartTime);
+            
+            // Auto-remover después de la duración
+            codeTimeout = setTimeout(() => {
+                console.log(`❌ Código expirado: ${code}`);
+                removeCode();
+            }, duration * 1000);
+        }
+        
+        function removeCode() {
+            if (codeTimeout) clearTimeout(codeTimeout);
+            if (codeBlinkInterval) clearInterval(codeBlinkInterval);
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            
+            if (codeElement) {
+                // Fadeout suave
+                codeElement.style.opacity = '0';
+                setTimeout(() => {
+                    if (codeElement && codeElement.parentNode) {
+                        codeElement.remove();
+                    }
+                    codeElement = null;
+                }, 500); // Esperar a que termine el fadeout
+            }
+            activeCode = null;
+        }
+
+        // --- Conexión WebSocket con reconexión automática ---
+        let ws;
+        let isConnecting = false;
+        let reconnectAttempts = 0;
+        
+        function connectWebSocket() {
+            if (isConnecting) {
+                console.log('[WS] ⏳ Ya hay un intento de conexión en curso...');
+                return;
+            }
+            
+            isConnecting = true;
+            console.log(`[WS] 🔄 Intentando conectar... (Intento #${reconnectAttempts + 1})`);
+            
+            try {
+                ws = new WebSocket('ws://localhost:8765');
+            } catch (error) {
+                console.error('[WS] ❌ Error creando WebSocket:', error);
+                isConnecting = false;
+                setTimeout(connectWebSocket, 3000);
+                return;
+            }
+
+            ws.addEventListener('open', () => {
+                console.log('[WS] ✅ Conectado a ws://localhost:8765');
+                isConnecting = false;
+                reconnectAttempts = 0;
+            });
+
+            ws.addEventListener('message', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('[WS] 📨 Mensaje recibido:', data);
+                    
+                    // Manejar notificaciones
+                    if (data && data.type === 'notification') {
+                        // CASO 1: Notificación de tienda (con notificationId)
+                        if (data.notificationId) {
+                            const notifId = data.notificationId;
+                            
+                            // Validar que el notifId no sea un placeholder
+                            if (notifId.includes('<') || notifId.includes('>')) {
+                                console.error('[WS] ❌ notificationId inválido:', notifId);
+                                console.error('      Verifica que el backend envíe el ID correcto del item');
+                                console.error('      Datos recibidos:', JSON.stringify(data, null, 2));
+                                return;
+                            }
+                            
+                            console.log('[WS] 🎁 Notificación de tienda:', notifId);
+                            handleIncomingNotification(notifId, data);
+                        } 
+                        // CASO 2: Notificación de evento (sin notificationId, usa caseType)
+                        else if (data.caseType) {
+                            console.log('[WS] 📢 Notificación de evento (caseType:', data.caseType + ')');
+                            showDynamicNotification(data);
+                        }
+                        else {
+                            console.error('[WS] ❌ Notificación sin notificationId ni caseType:', data);
+                        }
+                    }
+                    
+                    // Manejar códigos recompensables
+                    if (data && data.type === 'show_code') {
+                        console.log('[WS] 🎁 Código recibido:', data.code);
+                        showCode(data.code, data.duration, data.blink_start);
+                    }
+                    
+                    // Código canjeado - remover de pantalla
+                    if (data && data.type === 'code_redeemed') {
+                        removeCode();
+                    }
+                } catch (e) {
+                    console.warn('[WS] Error parseando mensaje:', e);
+                }
+            });
+
+            ws.addEventListener('close', (event) => {
+                console.log(`[WS] 🔴 Desconectado del servidor (Código: ${event.code})`);
+                isConnecting = false;
+                reconnectAttempts++;
+                const delay = Math.min(3000 + (reconnectAttempts * 1000), 10000); // Max 10s
+                console.log(`[WS] 🔄 Reintentando conexión en ${delay/1000}s...`);
+                setTimeout(connectWebSocket, delay);
+            });
+
+            ws.addEventListener('error', (err) => {
+                console.error('[WS] ❌ Error en WebSocket:', err);
+                isConnecting = false;
+                // El evento 'close' se disparará automáticamente después del error
+            });
+        }
+
+        // Inicializar al cargar la página
+        window.addEventListener('load', () => {
+            loadNotificationCatalog();
+            connectWebSocket();
+        });
+    </script>
+</body>
+</html>

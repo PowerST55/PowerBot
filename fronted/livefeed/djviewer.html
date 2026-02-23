@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>YouTube embed con WebSocket</title>
+  <meta name="referrer" content="origin" />
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <style>
+    body { margin: 0; display: grid; place-items: center; min-height: 100vh; background:#111; }
+    #player { width: 80vw; height: 45vw; max-width: 1280px; max-height: 720px; }
+    #user-info { position: absolute; top: 10px; left: 10px; color: white; font-size: 18px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div id="user-info"></div>
+  <div id="player"></div>
+
+  <script>
+    let player;
+    let socket;
+    let loopEnabled = false;
+
+    // Función para crear el reproductor de YouTube
+    function onYouTubeIframeAPIReady() {
+      player = new YT.Player('player', {
+        height: '45vw',
+        width: '80vw',
+        maxWidth: '1280px',
+        maxHeight: '720px',
+        videoId: '', // Sin video por defecto
+        playerVars: {
+          autoplay: 0, // No autoplay
+          controls: 1,
+          enablejsapi: 1
+        },
+        events: {
+          'onStateChange': onPlayerStateChange
+        }
+      });
+    }
+
+    // Manejar cambios de estado del video
+    function onPlayerStateChange(event) {
+      if (event.data == YT.PlayerState.ENDED) {
+        if (loopEnabled) {
+          player.playVideo();
+        } else {
+          socket.send(JSON.stringify({ type: "video_ended" }));
+        }
+      }
+    }
+
+    // Conexión WebSocket con reconexión automática
+    function connectWebSocket() {
+      socket = new WebSocket("ws://localhost:8765");
+      
+      socket.onopen = () => {
+        console.log("🟢 Conectado al WebSocket (djviewer)");
+      };
+
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        // Si recibimos un link de YouTube
+        if (data.type === "youtube") {
+          console.log("Recibido link de YouTube:", data.url);
+
+          // Mostrar el nombre del usuario
+          document.getElementById('user-info').textContent = `Enviado por: ${data.user}`;
+
+          // Extraer el ID del video
+          const match = data.url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]+)/);
+          if (match) {
+            const videoId = match[1];
+            // Cargar el nuevo video
+            player.loadVideoById(videoId);
+          }
+        } else if (data.type === "pause") {
+          console.log("Recibido comando de pausa");
+          player.pauseVideo();
+        } else if (data.type === "play") {
+          console.log("Recibido comando de reproducción");
+          player.playVideo();
+        } else if (data.type === "stop") {
+          console.log("Recibido comando de detener");
+          player.stopVideo();
+        } else if (data.type === "volume") {
+          console.log("Recibido comando de volumen:", data.level);
+          player.setVolume(data.level);
+        } else if (data.type === "loop") {
+          loopEnabled = data.enabled;
+          console.log("Bucle", loopEnabled ? "activado" : "desactivado");
+        }
+      };
+
+      socket.onclose = () => {
+        console.log("🔴 Desconectado del WebSocket (djviewer)");
+        // Reconectar automáticamente después de 3 segundos
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      socket.onerror = (err) => {
+        console.error("❌ Error WebSocket", err);
+        socket.close();
+      };
+    }
+
+    connectWebSocket();
+  </script>
+</body>
+</html>

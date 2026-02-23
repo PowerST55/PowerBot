@@ -1,125 +1,261 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Estado WebSocket</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PowerBot</title>
 
-    <style>
-        /* =======================
-           CONFIGURACIÓN GENERAL
-        ======================== */
-        body {
-            margin: 0;
-            padding: 0;
-            background: transparent;
-            overflow: hidden;
-        }
+<style>
+/* ========================= */
+/* RESET */
+/* ========================= */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
 
-        /* =======================
-           ICONO DE ESTADO
-        ======================== */
-        #status-logo {
-            position: absolute;
-            top: 12px;
-            right: 20px;
-            width: 65px;
-            height: 65px;
-        }
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+    color: white;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
 
-        /* =======================
-           ESTADOS
-        ======================== */
-        .disconnected {
-            filter: drop-shadow(0 0 8px red);
-            animation: pulse-red 2s infinite;
-        }
+/* ========================= */
+/* CONTENEDOR PRINCIPAL */
+/* ========================= */
+.main-container {
+    width: 1100px;
+    max-width: 95%;
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(15px);
+    border-radius: 25px;
+    padding: 40px 60px;
+    box-shadow: 0 25px 70px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
 
-        .connected {
-            filter: drop-shadow(0 0 5px rgb(191, 236, 191));
-            animation: pulse-green 2s infinite;
-        }
+/* ========================= */
+/* NAVBAR */
+/* ========================= */
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 40px;
+}
 
-        /* =======================
-           ANIMACIONES
-        ======================== */
-        @keyframes pulse-red {
-            0%, 100% {
-                filter: drop-shadow(0 0 8px red);
-            }
-            50% {
-                filter: drop-shadow(0 0 15px red);
-            }
-        }
+.logo {
+    font-size: 26px;
+    font-weight: bold;
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
 
-        @keyframes pulse-green {
-            0%, 100% {
-                filter: drop-shadow(0 0 5px rgb(70, 156, 70));
-            }
-            50% {
-                filter: drop-shadow(0 0 10px rgb(93, 139, 93));
-            }
-        }
-    </style>
+.menu {
+    display: flex;
+    gap: 25px;
+}
+
+.menu a {
+    text-decoration: none;
+    color: white;
+    opacity: 0.7;
+    font-size: 14px;
+    transition: 0.2s ease;
+}
+
+.menu a:hover {
+    opacity: 1;
+    color: #38bdf8;
+}
+
+/* ========================= */
+/* HERO */
+/* ========================= */
+.hero {
+    text-align: center;
+    margin-bottom: 50px;
+}
+
+.hero h1 {
+    font-size: 38px;
+    margin-bottom: 15px;
+}
+
+.hero p {
+    max-width: 750px;
+    margin: 0 auto;
+    line-height: 1.6;
+    opacity: 0.85;
+}
+
+/* ========================= */
+/* BOTONES PRINCIPALES */
+/* ========================= */
+.button-section {
+    display: flex;
+    justify-content: center;
+    gap: 25px;
+    flex-wrap: wrap;
+    margin-bottom: 60px;
+}
+
+.main-btn {
+    padding: 16px 35px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.25s ease;
+    border: none;
+}
+.social-btn {
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(30, 41, 59, 0.6);
+    color: white;
+    transition: 0.2s ease;
+    text-decoration: none; /* IMPORTANTE */
+    display: inline-block;
+}
+
+.social-btn:hover {
+    background: rgba(56, 189, 248, 0.2);
+    border-color: #38bdf8;
+}
+
+/* Botón principal */
+.primary-btn {
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    color: white;
+}
+
+.primary-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(56, 189, 248, 0.5);
+}
+
+/* Placeholder botones futuros */
+.future-btn {
+    background: rgba(51, 65, 85, 0.4);
+    border: 1px dashed rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.4);
+    cursor: default;
+}
+
+/* ========================= */
+/* FOOTER SOCIAL */
+/* ========================= */
+.footer {
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 25px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.footer-text {
+    font-size: 13px;
+    opacity: 0.6;
+}
+
+.social-buttons {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.social-btn {
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(30, 41, 59, 0.6);
+    color: white;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.social-btn:hover {
+    background: rgba(56, 189, 248, 0.2);
+    border-color: #38bdf8;
+}
+</style>
 </head>
 
 <body>
 
-    <!-- ICONO -->
-    <img
-        id="status-logo"
-        src="img/check.png"
-        alt="Estado de conexión"
-        class="disconnected"
-    >
+<div class="main-container">
 
-    <!-- =======================
-         SCRIPT WEBSOCKET
-    ======================== -->
-    <script>
-        let socket;
-        const statusIndicator = document.getElementById("status-logo");
+    <!-- NAVBAR -->
+    <div class="navbar">
+        <div class="logo">⚡ PowerBot</div>
+        <div class="menu">
+            <a href="index.html">Inicio</a>
+            <a href="#">Admin</a>
+            <a href="https://github.com/PowerST55/PowerBot">GitHub</a>
+        </div>
+    </div>
 
-        function connectWebSocket() {
-            socket = new WebSocket("ws://localhost:8765");
+    <!-- HERO -->
+    <div class="hero">
+        <h1>Primera version web del PowerBot</h1>
+        <p>
+            Bienvenido, Querido usuario. Espero esta pagina sea de su agrado, En esta encontraran herramientas de visualizacion e interfaz grafica del PowerBot el cual tiene multi propositos entre ellos que los usuarios puedan visualizar de manera mas interactiva tops, estadisticas y actividades. Cualquier inconveniente con la pagina o en la aplicacion no dudes en reportarla en el canal de Tickets de nuestro servidor de Discord.</p>
+    </div>
 
-            socket.onopen = () => {
-                console.log("🟢 Conectado al WebSocket");
-                statusIndicator.classList.remove("disconnected");
-                statusIndicator.classList.add("connected");
-            };
+    <!-- BOTONES -->
+    <div class="button-section">
+        <button class="main-btn primary-btn" onclick="window.location.href='/pages.top.html'">
+            Ver Top 10
+        </button>
 
-            socket.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
+        <!-- Espacios futuros -->
+        <button class="main-btn future-btn">Próximamente</button>
+        <button class="main-btn future-btn">Próximamente</button>
+    </div>
 
-                    if (data.type === "redirect") {
-                        console.log("➡ Redirigiendo a:", data.url);
-                        window.location.href = data.url;
-                    }
-                } catch (e) {
-                    console.warn("Mensaje no JSON:", event.data);
-                }
-            };
+    <!-- FOOTER -->
+    <div class="footer">
+        <div class="footer-text">
+            © 2026 PowerBot — Sistema de Economía Multiplataforma
+        </div>
 
-            socket.onclose = () => {
-                console.log("🔴 Desconectado del WebSocket");
-                statusIndicator.classList.remove("connected");
-                statusIndicator.classList.add("disconnected");
+        <div class="social-buttons">
+    <a href="https://discord.gg/ZrKe2yG4Ks" target="_blank" class="social-btn">
+        Discord
+    </a>
 
-                setTimeout(connectWebSocket, 3000);
-            };
+    <a href="https://www.youtube.com/@ElPowerST" target="_blank" class="social-btn">
+        YouTube
+    </a>
 
-            socket.onerror = (err) => {
-                console.error("❌ Error WebSocket", err);
-                statusIndicator.classList.remove("connected");
-                statusIndicator.classList.add("disconnected");
-                socket.close();
-            };
-        }
+    <a href="https://www.instagram.com/ionmaxias/" target="_blank" class="social-btn">
+        Instagram
+    </a>
 
-        connectWebSocket();
-    </script>
+    <a href="https://www.tiktok.com/@ionmaxias" target="_blank" class="social-btn">
+        TikTok
+    </a>
+
+    <a href="https://www.roblox.com/es/users/2745412910/profile" target="_blank" class="social-btn">
+        Roblox
+    </a>
+</div>
+    </div>
+
+</div>
 
 </body>
 </html>

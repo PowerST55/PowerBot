@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Estado WebSocket</title>
+
+    <style>
+        /* =======================
+           CONFIGURACIÓN GENERAL
+        ======================== */
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+        }
+
+        /* =======================
+           ICONO DE ESTADO
+        ======================== */
+        #status-logo {
+            position: absolute;
+            top: 12px;
+            right: 20px;
+            width: 65px;
+            height: 65px;
+        }
+
+        /* =======================
+           ESTADOS
+        ======================== */
+        .disconnected {
+            filter: drop-shadow(0 0 8px red);
+            animation: pulse-red 2s infinite;
+        }
+
+        .connected {
+            filter: drop-shadow(0 0 5px rgb(191, 236, 191));
+            animation: pulse-green 2s infinite;
+        }
+
+        /* =======================
+           ANIMACIONES
+        ======================== */
+        @keyframes pulse-red {
+            0%, 100% {
+                filter: drop-shadow(0 0 8px red);
+            }
+            50% {
+                filter: drop-shadow(0 0 15px red);
+            }
+        }
+
+        @keyframes pulse-green {
+            0%, 100% {
+                filter: drop-shadow(0 0 5px rgb(70, 156, 70));
+            }
+            50% {
+                filter: drop-shadow(0 0 10px rgb(93, 139, 93));
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- ICONO -->
+    <img
+        id="status-logo"
+        src="img/check.png"
+        alt="Estado de conexión"
+        class="disconnected"
+    >
+
+    <!-- =======================
+         SCRIPT WEBSOCKET
+    ======================== -->
+    <script>
+        let socket;
+        const statusIndicator = document.getElementById("status-logo");
+
+        function connectWebSocket() {
+            socket = new WebSocket("ws://localhost:8765");
+
+            socket.onopen = () => {
+                console.log("🟢 Conectado al WebSocket");
+                statusIndicator.classList.remove("disconnected");
+                statusIndicator.classList.add("connected");
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === "redirect") {
+                        console.log("➡ Redirigiendo a:", data.url);
+                        window.location.href = data.url;
+                    }
+                } catch (e) {
+                    console.warn("Mensaje no JSON:", event.data);
+                }
+            };
+
+            socket.onclose = () => {
+                console.log("🔴 Desconectado del WebSocket");
+                statusIndicator.classList.remove("connected");
+                statusIndicator.classList.add("disconnected");
+
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            socket.onerror = (err) => {
+                console.error("❌ Error WebSocket", err);
+                statusIndicator.classList.remove("connected");
+                statusIndicator.classList.add("disconnected");
+                socket.close();
+            };
+        }
+
+        connectWebSocket();
+    </script>
+
+</body>
+</html>
