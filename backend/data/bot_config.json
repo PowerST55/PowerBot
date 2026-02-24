@@ -1,7 +1,4 @@
 {
-  "bot_name": "PowerBot",
-  "version": "2.0.0",
-  "debug_mode": false,
   "youtube": {
     "autorun": true
   }

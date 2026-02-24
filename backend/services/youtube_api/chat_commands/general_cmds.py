@@ -13,6 +13,7 @@ from backend.managers.user_lookup_manager import (
 from .economy.economy_general import process_economy_command
 from .games.gamble import process_gamble_command
 from .games.slots import process_slots_command
+from .link_acc import process_link_command
 from .livefeed.admin import process_livefeed_admin_command
 from .livefeed.spinwheel import process_spinwheel_participation_command
 from ..send_message import send_chat_message
@@ -43,6 +44,9 @@ async def process_general_command(
 		return True
 
 	if await process_spinwheel_participation_command(command, args, message, client, live_chat_id):
+		return True
+
+	if await process_link_command(command, args, message, client, live_chat_id):
 		return True
 
 	if command == "id":

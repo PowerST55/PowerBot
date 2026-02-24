@@ -2,5 +2,6 @@
   "confession_channel": 1171835914394271816,
   "logs_channel": 1461806328727998809,
   "music_channel": null,
-  "commands_channel": null
+  "commands_channel": null,
+  "afk_voice_channel": 1475629454041678110
 }

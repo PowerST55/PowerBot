@@ -25,6 +25,7 @@ class ChannelsConfig:
             "logs_channel": None,
             "music_channel": None,
             "commands_channel": None,
+            "afk_voice_channel": None,
         }
         
         self._config = self._load()

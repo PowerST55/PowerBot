@@ -104,20 +104,73 @@ class CommandContext:
 # COMANDOS DE YOUTUBE
 # ============================================================================
 
+async def _shutdown_yapi_runtime(console) -> list[str]:
+    """Apaga todo el runtime de YouTube sin borrar token."""
+    yt = _get_youtube()
+    listener = _get_listener()
+    chat_manager = _get_chat_id_manager()
+    actions: list[str] = []
+
+    if listener and listener.is_running:
+        await listener.stop()
+        actions.append("Listener detenido")
+    if listener:
+        _set_listener(None)
+
+    if chat_manager and chat_manager.is_monitoring:
+        await chat_manager.stop_monitoring()
+        actions.append("Monitoreo detenido")
+    if chat_manager:
+        _set_chat_id_manager(None)
+
+    if yt and yt.is_connected():
+        yt.disconnect()
+        actions.append("API desconectada")
+    if yt:
+        _set_youtube(None)
+
+    return actions
+
 async def cmd_youtube_yapi(ctx: CommandContext) -> None:
     """
-    Activa YouTube API e inicia el listener automáticamente.
-    Busca la transmisión en vivo y comienza a escuchar mensajes.
+    Comando alternable ON/OFF del sistema YouTube.
+    Si está apagado, conecta API e inicia listener.
+    Si está encendido, apaga listener/monitoreo/API.
     Uso: yapi
     """
     console = _get_console()
     yt = _get_youtube()
     listener = _get_listener()
-    
-    # Verificar si ya hay un listener corriendo
-    if listener and listener.is_running:
-        ctx.warning("El listener ya está en ejecución")
-        ctx.print("Usa 'yt status' para ver el estado")
+    chat_manager = _get_chat_id_manager()
+
+    is_active = bool(
+        (listener and listener.is_running)
+        or (chat_manager and chat_manager.is_monitoring)
+        or (yt and yt.is_connected())
+    )
+
+    if is_active:
+        try:
+            console.print("[info]🛑 YAPI activo detectado, apagando sistema...[/info]")
+            actions = await _shutdown_yapi_runtime(console)
+
+            console.print("\n" + "=" * 60)
+            console.print("[bold yellow]🛑 YOUTUBE API DESACTIVADO[/bold yellow]")
+            console.print("=" * 60)
+            console.print("")
+            ctx.success("✅ YAPI apagado correctamente")
+            if actions:
+                for action in actions:
+                    ctx.print(f"• {action}")
+            else:
+                ctx.print("• No había procesos activos para detener")
+            ctx.print("")
+            ctx.print("💡 Ejecuta 'yapi' nuevamente para encenderlo")
+            console.print("")
+        except Exception as e:
+            ctx.error(f"❌ Error al apagar YAPI: {str(e)}")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
         return
     
     try:
@@ -350,7 +403,7 @@ async def cmd_youtube_help(ctx: CommandContext) -> None:
     help_text = """
 🎬 [bold cyan]Comandos de YouTube API:[/bold cyan]
 
-  [yellow]yapi[/yellow]             - 🚀 Conecta YouTube e inicia listener (TODO EN UNO)
+    [yellow]yapi[/yellow]             - 🔁 Alterna ON/OFF del sistema YouTube (todo en uno)
     [yellow]yt autorun[/yellow]       - Alterna/define inicio automático (true|false)
   [yellow]yt listener[/yellow]      - Inicia el listener de mensajes del chat
   [yellow]yt stop_listener[/yellow] - Detiene el listener de mensajes
@@ -368,7 +421,7 @@ async def cmd_youtube_help(ctx: CommandContext) -> None:
   • Chat ID se guarda en [dim]data/youtube_bot/active_chat.json[/dim]
 
 [bold cyan]Ejemplos:[/bold cyan]
-  [dim]yapi[/dim]                  - Inicia todo el sistema automáticamente ⭐
+    [dim]yapi[/dim]                  - Enciende si está OFF / apaga si está ON ⭐
     [dim]yt autorun true[/dim]       - Activa autorun (modo yapi completo)
     [dim]yt autorun false[/dim]      - Desactiva autorun
   [dim]yt listener[/dim]           - Comienza a escuchar mensajes del chat

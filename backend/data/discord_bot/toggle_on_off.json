@@ -1,5 +1,5 @@
 {
-  "discord_enabled": false,
-  "last_updated": "2026-02-23T03:51:40.235836",
-  "status": "off"
+  "discord_enabled": true,
+  "last_updated": "2026-02-23T23:57:07.754653",
+  "status": "on"
 }

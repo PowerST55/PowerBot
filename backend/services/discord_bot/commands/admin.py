@@ -131,6 +131,54 @@ def setup_admin_commands(bot: commands.Bot):
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @set_group.command(name="afk_voice_channel", description="Configura el canal de voz AFK (sin ganancias)")
+    @app_commands.describe(channel="Canal de voz AFK a bloquear para earning")
+    async def set_afk_voice_channel(interaction: discord.Interaction, channel: discord.VoiceChannel):
+        """Configura el canal de voz AFK para bloquear earning - Solo administradores"""
+
+        if not interaction.user.guild_permissions.administrator:
+            embed = discord.Embed(
+                title="❌ Acceso denegado",
+                description="Solo los administradores pueden usar este comando.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        try:
+            channels_config = get_channels_config(interaction.guild.id)
+            channels_config.set_channel("afk_voice_channel", channel.id)
+
+            embed = discord.Embed(
+                title="✅ Canal AFK de voz configurado",
+                description="Este canal quedará bloqueado para ganancias por llamada.",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Canal AFK", value=channel.mention, inline=True)
+            embed.add_field(name="ID", value=f"`{channel.id}`", inline=True)
+            embed.set_footer(text="Guardado en data/discord_bot/")
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            await log_success(
+                bot,
+                interaction.guild.id,
+                "Canal AFK de voz configurado",
+                f"Canal AFK de voz establecido por {interaction.user.mention}",
+                fields={
+                    "Canal": channel.mention,
+                    "ID": str(channel.id),
+                    "Configurado por": interaction.user.display_name,
+                }
+            )
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Error",
+                description=f"Error al configurar canal AFK de voz: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @set_group.command(name="currency", description="Configura la moneda del servidor")
     @app_commands.describe(

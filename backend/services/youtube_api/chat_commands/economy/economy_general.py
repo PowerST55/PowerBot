@@ -28,11 +28,11 @@ ECONOMY_COMMAND_ALIASES = {"puntos", "pews", "points", "balance", "pew"}
 TRANSFER_COMMAND_ALIASES = {"dar", "depositar", "transferir", "give"}
 
 
-def _format_points(points: int) -> str:
+def _format_points(points: float) -> str:
 	config = get_youtube_economy_config()
 	currency_name = config.get_currency_name()
 	currency_symbol = config.get_currency_symbol()
-	return f"{points} {currency_symbol} {currency_name}".strip()
+	return f"{float(points):,.2f} {currency_symbol} {currency_name}".strip()
 
 
 async def process_economy_command(
@@ -67,11 +67,14 @@ async def process_economy_command(
 			await send_chat_message(client, live_chat_id, "Uso: !dar <usuario o id> <cantidad>")
 			return True
 
-		if not amount_raw.isdigit() or int(amount_raw) <= 0:
-			await send_chat_message(client, live_chat_id, "La cantidad debe ser un número entero mayor a 0.")
-			return True
+		try:
+			amount = round(float(amount_raw.replace(",", ".")), 2)
+		except Exception:
+			amount = 0
 
-		amount = int(amount_raw)
+		if amount <= 0:
+			await send_chat_message(client, live_chat_id, "La cantidad debe ser un número mayor a 0 (hasta 2 decimales).")
+			return True
 
 		if target_query.isdigit():
 			target = find_user_by_global_id(int(target_query))
@@ -97,7 +100,7 @@ async def process_economy_command(
 			return True
 
 		to_name = target.youtube_profile.youtube_username if target.youtube_profile else target.display_name
-		from_points = int(result.get("from_balance", 0) or 0)
+		from_points = float(result.get("from_balance", 0) or 0)
 		await send_chat_message(
 			client,
 			live_chat_id,

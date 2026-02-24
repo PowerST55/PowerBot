@@ -95,6 +95,8 @@ def _stream_discord_logs(pipe, stream_name: str) -> None:
 			text = line.strip()
 			if not text:
 				continue
+			if "RuntimeWarning" in text and "backend.services.discord_bot.bot_core" in text:
+				continue
 
 			lower_text = text.lower()
 			if stream_name == "stderr":
@@ -122,6 +124,7 @@ async def _start_discord_process() -> tuple[bool, str]:
 	env = os.environ.copy()
 	env.setdefault("PYTHONUTF8", "1")
 	env.setdefault("PYTHONIOENCODING", "utf-8")
+	env.setdefault("PYTHONUNBUFFERED", "1")
 	pythonpath = env.get("PYTHONPATH", "")
 	root_str = str(project_root)
 	if root_str not in pythonpath:
@@ -130,12 +133,14 @@ async def _start_discord_process() -> tuple[bool, str]:
 
 	try:
 		_discord_process = subprocess.Popen(
-			[python_executable, "-m", "backend.services.discord_bot.bot_core"],
+			[python_executable, "-u", "-m", "backend.services.discord_bot.bot_core"],
 			cwd=str(project_root),
 			env=env,
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
 			text=True,
+			encoding="utf-8",
+			errors="replace",
 		)
 		await asyncio.sleep(1.2)
 		if _discord_process.poll() is not None:

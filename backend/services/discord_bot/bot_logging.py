@@ -152,6 +152,7 @@ async def send_log(
             )
         
         # Enviar al canal de logs
+        print(f"[DISCORD_LOG][{log_type.upper()}] {title} | {description}", flush=True)
         await logs_channel.send(embed=embed)
         return True
         

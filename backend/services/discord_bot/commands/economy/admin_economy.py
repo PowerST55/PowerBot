@@ -2,14 +2,12 @@
 Comandos de administracion de economia para PowerBot Discord.
 """
 from decimal import Decimal, InvalidOperation
-from datetime import datetime
 from typing import Optional, Tuple
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from backend.database import get_connection
 from backend.managers import get_or_create_discord_user, get_user_by_id
 from backend.managers import economy_manager
 from backend.services.discord_bot.config.economy import get_economy_config
@@ -178,65 +176,21 @@ def _apply_balance_delta(
 	reason: str,
 	interaction: discord.Interaction
 ) -> float:
-	conn = get_connection()
-	try:
-		economy_manager._ensure_wallet_tables(conn)
-		conn.execute("BEGIN IMMEDIATE")
-		now_iso = datetime.utcnow().isoformat()
-
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(user_id, now_iso, now_iso),
+	return float(
+		economy_manager.apply_balance_delta(
+			user_id=user_id,
+			delta=delta,
+			reason=reason,
+			platform="discord",
+			guild_id=str(interaction.guild_id) if interaction.guild_id else None,
+			channel_id=str(interaction.channel_id) if interaction.channel_id else None,
+			source_id=f"admin:{interaction.id}",
 		)
-
-		conn.execute(
-			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
-			(delta, now_iso, user_id),
-		)
-
-		conn.execute(
-			"""
-			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""",
-			(
-				user_id,
-				delta,
-				reason,
-				"discord",
-				str(interaction.guild_id) if interaction.guild_id else None,
-				str(interaction.channel_id) if interaction.channel_id else None,
-				f"admin:{interaction.id}",
-				now_iso,
-			),
-		)
-
-		row = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(user_id,)
-		).fetchone()
-		conn.commit()
-
-		return float(row["balance"] if row else 0)
-	except Exception:
-		conn.rollback()
-		raise
-	finally:
-		conn.close()
+	)
 
 
 def _get_current_balance(user_id: int) -> float:
-	conn = get_connection()
-	try:
-		economy_manager._ensure_wallet_tables(conn)
-		row = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(user_id,)
-		).fetchone()
-		return float(row["balance"]) if row else 0.0
-	finally:
-		conn.close()
+	return float(economy_manager.get_total_balance(user_id))
 
 
 async def _deny_permission(interaction: discord.Interaction) -> None:

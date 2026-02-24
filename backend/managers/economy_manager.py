@@ -5,14 +5,20 @@ Funciones robustas para consultar y gestionar puntos en todas las plataformas.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List
 
 from backend.database import get_connection
+from backend.managers.link_manager import resolve_active_user_id
 from backend.managers.user_manager import (
 	get_discord_profile_by_discord_id,
 	get_youtube_profile_by_channel_id,
-	get_user_by_id
 )
+
+SUPPORTED_PLATFORMS = ("discord", "youtube")
+
+
+def _round_amount(value: float | int) -> float:
+	return round(float(value), 2)
 
 
 def _ensure_earning_cooldown_table(conn) -> None:
@@ -38,19 +44,35 @@ def _ensure_wallet_tables(conn) -> None:
 		CREATE TABLE IF NOT EXISTS wallets (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL UNIQUE,
-			balance INTEGER NOT NULL DEFAULT 0,
+			balance REAL NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 		)
 		"""
 	)
+
+	conn.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS platform_wallets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			platform TEXT NOT NULL,
+			balance REAL NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+			UNIQUE(user_id, platform)
+		)
+		"""
+	)
+
 	conn.execute(
 		"""
 		CREATE TABLE IF NOT EXISTS wallet_ledger (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
-			amount INTEGER NOT NULL,
+			amount REAL NOT NULL,
 			reason TEXT NOT NULL,
 			platform TEXT,
 			guild_id TEXT,
@@ -80,32 +102,110 @@ def _ensure_earning_events_table(conn) -> None:
 	)
 
 
+def _ensure_platform_wallet_row(conn, user_id: int, platform: str, now_iso: str) -> None:
+	conn.execute(
+		"""
+		INSERT INTO platform_wallets (user_id, platform, balance, created_at, updated_at)
+		VALUES (?, ?, 0, ?, ?)
+		ON CONFLICT(user_id, platform) DO NOTHING
+		""",
+		(user_id, platform, now_iso, now_iso),
+	)
+
+
+def _sync_wallet_total(conn, user_id: int, now_iso: str) -> float:
+	row = conn.execute(
+		"SELECT COALESCE(SUM(balance), 0) AS total FROM platform_wallets WHERE user_id = ?",
+		(user_id,),
+	).fetchone()
+	total = _round_amount(row["total"] if row else 0.0)
+
+	conn.execute(
+		"""
+		INSERT INTO wallets (user_id, balance, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id)
+		DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at
+		""",
+		(user_id, total, now_iso, now_iso),
+	)
+	return total
+
+
+def _credit_platform_balance(conn, user_id: int, platform: str, amount: float, now_iso: str) -> float:
+	_credit = _round_amount(amount)
+	_ensure_platform_wallet_row(conn, user_id, platform, now_iso)
+	conn.execute(
+		"UPDATE platform_wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ? AND platform = ?",
+		(_credit, now_iso, user_id, platform),
+	)
+	return _sync_wallet_total(conn, user_id, now_iso)
+
+
+def _get_platform_balances(conn, user_id: int) -> Dict[str, float]:
+	rows = conn.execute(
+		"SELECT platform, balance FROM platform_wallets WHERE user_id = ?",
+		(user_id,),
+	).fetchall()
+	result = {"discord": 0.0, "youtube": 0.0}
+	for row in rows:
+		platform = str(row["platform"])
+		if platform in result:
+			result[platform] = _round_amount(row["balance"])
+	return result
+
+
+def _deduct_from_combined_balance(conn, user_id: int, amount: float, preferred_platform: str, now_iso: str) -> bool:
+	pending = _round_amount(amount)
+	if pending <= 0:
+		return True
+
+	balances = _get_platform_balances(conn, user_id)
+	ordered_platforms: list[str] = []
+	for platform in [preferred_platform, "discord", "youtube"]:
+		if platform in balances and platform not in ordered_platforms:
+			ordered_platforms.append(platform)
+
+	available = _round_amount(sum(balances.values()))
+	if available < pending:
+		return False
+
+	for platform in ordered_platforms:
+		if pending <= 0:
+			break
+		current = balances.get(platform, 0.0)
+		if current <= 0:
+			continue
+		take = _round_amount(min(current, pending))
+		if take <= 0:
+			continue
+		conn.execute(
+			"UPDATE platform_wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ? AND platform = ?",
+			(take, now_iso, user_id, platform),
+		)
+		pending = _round_amount(pending - take)
+
+	_sync_wallet_total(conn, user_id, now_iso)
+	return True
+
+
 def award_message_points(
 	discord_id: str,
 	guild_id: int,
-	amount: int,
+	amount: float,
 	interval_seconds: int,
 	source_id: str | None = None,
-) -> Dict[str, Optional[int]]:
-	"""
-	Awards message points with cooldown enforcement.
-	Solo actualiza puntos globales (wallets), sin separación por servidor.
-	"""
+) -> Dict[str, Optional[float]]:
+	"""Aumenta puntos por mensaje de Discord con cooldown e idempotencia."""
+	amount = _round_amount(amount)
 	if amount <= 0 or interval_seconds < 0:
-		return {
-			"awarded": 0,
-			"points_added": 0,
-			"global_points": None,
-		}
+		return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
 	profile = get_discord_profile_by_discord_id(str(discord_id))
 	if not profile:
-		return {
-			"awarded": 0,
-			"points_added": 0,
-			"global_points": None,
-		}
+		return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
+	user_id = resolve_active_user_id(int(profile.user_id))
 	now = datetime.utcnow()
 	now_iso = now.isoformat()
 	guild_id_text = str(guild_id)
@@ -124,15 +224,11 @@ def award_message_points(
 			).fetchone()
 			if existing:
 				conn.rollback()
-				return {
-					"awarded": 0,
-					"points_added": 0,
-					"global_points": None,
-				}
+				return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
 		row = conn.execute(
 			"SELECT last_earned_at FROM earning_cooldown WHERE user_id = ? AND guild_id = ?",
-			(profile.user_id, guild_id_text),
+			(user_id, guild_id_text),
 		).fetchone()
 
 		if row:
@@ -140,54 +236,26 @@ def award_message_points(
 				last_earned = datetime.fromisoformat(row["last_earned_at"])
 			except Exception:
 				last_earned = None
-			if last_earned:
-				elapsed = (now - last_earned).total_seconds()
-				if elapsed < interval_seconds:
-					conn.rollback()
-					return {
-						"awarded": 0,
-						"points_added": 0,
-						"global_points": None,
-					}
+			if last_earned and (now - last_earned).total_seconds() < interval_seconds:
+				conn.rollback()
+				return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
-		# Crear wallet si no existe
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(profile.user_id, now_iso, now_iso),
-		)
-		
-		# Actualizar balance global
-		conn.execute(
-			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
-			(amount, now_iso, profile.user_id),
-		)
+		global_points = _credit_platform_balance(conn, user_id, "discord", amount, now_iso)
 
-		# Registrar transacción
 		conn.execute(
 			"""
 			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			""",
-			(
-				profile.user_id,
-				amount,
-				"message_earning",
-				"discord",
-				guild_id_text,
-				None,
-				source_id,
-				now_iso,
-			),
+			(user_id, amount, "message_earning", "discord", guild_id_text, None, source_id, now_iso),
 		)
 
 		if source_id:
 			conn.execute(
 				"INSERT INTO earning_events (platform, source_id, user_id, created_at) VALUES (?, ?, ?, ?)",
-				("discord", source_id, profile.user_id, now_iso),
+				("discord", source_id, user_id, now_iso),
 			)
 
-		# Actualizar cooldown
 		conn.execute(
 			"""
 			INSERT INTO earning_cooldown (user_id, guild_id, last_earned_at, created_at, updated_at)
@@ -195,30 +263,11 @@ def award_message_points(
 			ON CONFLICT(user_id, guild_id)
 			DO UPDATE SET last_earned_at = ?, updated_at = ?
 			""",
-			(
-				profile.user_id,
-				guild_id_text,
-				now_iso,
-				now_iso,
-				now_iso,
-				now_iso,
-				now_iso,
-			),
+			(user_id, guild_id_text, now_iso, now_iso, now_iso, now_iso, now_iso),
 		)
 
-		# Obtener balance final
-		global_points = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(profile.user_id,),
-		).fetchone()
-
 		conn.commit()
-
-		return {
-			"awarded": 1,
-			"points_added": amount,
-			"global_points": global_points["balance"] if global_points else None,
-		}
+		return {"awarded": 1, "points_added": amount, "global_points": global_points}
 	except Exception:
 		conn.rollback()
 		raise
@@ -229,29 +278,20 @@ def award_message_points(
 def award_youtube_message_points(
 	youtube_channel_id: str,
 	chat_id: str,
-	amount: int,
+	amount: float,
 	interval_seconds: int,
 	source_id: str | None = None,
-) -> Dict[str, Optional[int]]:
-	"""
-	Aumenta puntos por mensaje en YouTube con cooldown.
-	Usa wallets globales e idempotencia por source_id.
-	"""
+) -> Dict[str, Optional[float]]:
+	"""Aumenta puntos por mensaje de YouTube con cooldown e idempotencia."""
+	amount = _round_amount(amount)
 	if amount <= 0 or interval_seconds < 0:
-		return {
-			"awarded": 0,
-			"points_added": 0,
-			"global_points": None,
-		}
+		return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
 	profile = get_youtube_profile_by_channel_id(str(youtube_channel_id))
 	if not profile:
-		return {
-			"awarded": 0,
-			"points_added": 0,
-			"global_points": None,
-		}
+		return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
+	user_id = resolve_active_user_id(int(profile.user_id))
 	now = datetime.utcnow()
 	now_iso = now.isoformat()
 	chat_id_text = str(chat_id)
@@ -270,15 +310,11 @@ def award_youtube_message_points(
 			).fetchone()
 			if existing:
 				conn.rollback()
-				return {
-					"awarded": 0,
-					"points_added": 0,
-					"global_points": None,
-				}
+				return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
 		row = conn.execute(
 			"SELECT last_earned_at FROM earning_cooldown WHERE user_id = ? AND guild_id = ?",
-			(profile.user_id, chat_id_text),
+			(user_id, chat_id_text),
 		).fetchone()
 
 		if row:
@@ -286,26 +322,11 @@ def award_youtube_message_points(
 				last_earned = datetime.fromisoformat(row["last_earned_at"])
 			except Exception:
 				last_earned = None
-			if last_earned:
-				elapsed = (now - last_earned).total_seconds()
-				if elapsed < interval_seconds:
-					conn.rollback()
-					return {
-						"awarded": 0,
-						"points_added": 0,
-						"global_points": None,
-					}
+			if last_earned and (now - last_earned).total_seconds() < interval_seconds:
+				conn.rollback()
+				return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(profile.user_id, now_iso, now_iso),
-		)
-
-		conn.execute(
-			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
-			(amount, now_iso, profile.user_id),
-		)
+		global_points = _credit_platform_balance(conn, user_id, "youtube", amount, now_iso)
 
 		conn.execute(
 			"""
@@ -313,7 +334,7 @@ def award_youtube_message_points(
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			""",
 			(
-				profile.user_id,
+				user_id,
 				amount,
 				"message_earning",
 				"youtube",
@@ -327,7 +348,7 @@ def award_youtube_message_points(
 		if source_id:
 			conn.execute(
 				"INSERT INTO earning_events (platform, source_id, user_id, created_at) VALUES (?, ?, ?, ?)",
-				("youtube", source_id, profile.user_id, now_iso),
+				("youtube", source_id, user_id, now_iso),
 			)
 
 		conn.execute(
@@ -337,29 +358,11 @@ def award_youtube_message_points(
 			ON CONFLICT(user_id, guild_id)
 			DO UPDATE SET last_earned_at = ?, updated_at = ?
 			""",
-			(
-				profile.user_id,
-				chat_id_text,
-				now_iso,
-				now_iso,
-				now_iso,
-				now_iso,
-				now_iso,
-			),
+			(user_id, chat_id_text, now_iso, now_iso, now_iso, now_iso, now_iso),
 		)
 
-		global_points = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(profile.user_id,),
-		).fetchone()
-
 		conn.commit()
-
-		return {
-			"awarded": 1,
-			"points_added": amount,
-			"global_points": global_points["balance"] if global_points else None,
-		}
+		return {"awarded": 1, "points_added": amount, "global_points": global_points}
 	except Exception:
 		conn.rollback()
 		raise
@@ -372,119 +375,48 @@ def award_youtube_message_points(
 # ============================================================
 
 def get_user_balance_by_id(user_id: int) -> Dict[str, any]:
-	"""
-	Obtiene el balance completo de un usuario por ID universal.
-	
-	Esta es la función principal y más robusta para consultar puntos.
-	Se usa internamente por las otras funciones de consulta.
-	
-	Args:
-		user_id: ID único universal del usuario
-		
-	Returns:
-		Dict con:
-			- global_points: Puntos globales totales
-			- user_exists: Si el usuario existe
-			
-	Example:
-		>>> balance = get_user_balance_by_id(42)
-		>>> print(f"Puntos globales: {balance['global_points']}")
-	"""
+	"""Obtiene el balance completo de un usuario por ID universal."""
+	resolved_user_id = resolve_active_user_id(int(user_id))
 	conn = get_connection()
 	try:
-		# Verificar si el usuario existe
-		user = conn.execute(
-			"SELECT user_id FROM users WHERE user_id = ?",
-			(user_id,)
-		).fetchone()
-		
+		_ensure_wallet_tables(conn)
+		user = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (resolved_user_id,)).fetchone()
 		if not user:
-			return {
-				"user_exists": False,
-				"global_points": 0
-			}
-		
-		# Obtener puntos globales
-		wallet = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(user_id,)
-		).fetchone()
-		
-		global_points = wallet["balance"] if wallet else 0
-		
+			return {"user_exists": False, "global_points": 0.0, "platform_balances": {"discord": 0.0, "youtube": 0.0}}
+
+		now_iso = datetime.utcnow().isoformat()
+		_ensure_platform_wallet_row(conn, resolved_user_id, "discord", now_iso)
+		_ensure_platform_wallet_row(conn, resolved_user_id, "youtube", now_iso)
+		global_points = _sync_wallet_total(conn, resolved_user_id, now_iso)
+		platform_balances = _get_platform_balances(conn, resolved_user_id)
+		conn.commit()
+
 		return {
 			"user_exists": True,
-			"global_points": global_points
+			"global_points": global_points,
+			"platform_balances": platform_balances,
 		}
-		
 	finally:
 		conn.close()
 
 
 def get_user_balance_by_discord_id(discord_id: str) -> Optional[Dict[str, any]]:
-	"""
-	Obtiene el balance de un usuario por su Discord ID.
-	
-	Args:
-		discord_id: Discord ID del usuario (string numérico)
-		
-	Returns:
-		Dict con balance o None si no existe
-		
-	Example:
-		>>> balance = get_user_balance_by_discord_id("123456789012345678")
-		>>> if balance:
-		...     print(f"Puntos: {balance['global_points']}")
-	"""
 	profile = get_discord_profile_by_discord_id(str(discord_id))
 	if not profile:
 		return None
-	
 	return get_user_balance_by_id(profile.user_id)
 
 
 def get_user_balance_by_youtube_id(youtube_channel_id: str) -> Optional[Dict[str, any]]:
-	"""
-	Obtiene el balance de un usuario por su YouTube Channel ID.
-	
-	Args:
-		youtube_channel_id: YouTube Channel ID del usuario
-		
-	Returns:
-		Dict con balance o None si no existe
-		
-	Example:
-		>>> balance = get_user_balance_by_youtube_id("UCxxxxxxxxxxxxxxxxxx")
-		>>> if balance:
-		...     print(f"Puntos: {balance['global_points']}")
-	"""
 	profile = get_youtube_profile_by_channel_id(youtube_channel_id)
 	if not profile:
 		return None
-	
 	return get_user_balance_by_id(profile.user_id)
 
 
 def get_user_balance_smart(identifier: str, platform: Optional[str] = None) -> Optional[Dict[str, any]]:
-	"""
-	Búsqueda inteligente de balance que detecta automáticamente la plataforma.
-	
-	Args:
-		identifier: ID del usuario (puede ser Discord ID, YouTube ID, o ID global)
-		platform: Plataforma preferida si hay ambigüedad ("discord", "youtube", "global")
-		
-	Returns:
-		Dict con balance o None si no existe
-		
-	Example:
-		>>> # Auto-detecta
-		>>> balance = get_user_balance_smart("123456789012345678")  # Discord
-		>>> balance = get_user_balance_smart("42")  # ID Global
-		>>> balance = get_user_balance_smart("UCxxxxxxxxxx")  # YouTube
-	"""
 	identifier = str(identifier).strip()
-	
-	# 1. Intentar ID global si es numérico corto
+
 	if identifier.isdigit() and len(identifier) < 10:
 		try:
 			result = get_user_balance_by_id(int(identifier))
@@ -492,228 +424,223 @@ def get_user_balance_smart(identifier: str, platform: Optional[str] = None) -> O
 				return result
 		except ValueError:
 			pass
-	
-	# 2. Intentar YouTube si empieza con UC
+
 	if identifier.startswith("UC") and len(identifier) > 10:
 		result = get_user_balance_by_youtube_id(identifier)
 		if result:
 			return result
-	
-	# 3. Intentar Discord si es numérico largo
+
 	if identifier.isdigit() and len(identifier) >= 10:
 		result = get_user_balance_by_discord_id(identifier)
 		if result:
 			return result
-	
-	# 4. Intentar plataforma preferida
+
 	if platform == "discord":
 		return get_user_balance_by_discord_id(identifier)
-	elif platform == "youtube":
+	if platform == "youtube":
 		return get_user_balance_by_youtube_id(identifier)
-	elif platform == "global":
+	if platform == "global":
 		try:
 			return get_user_balance_by_id(int(identifier))
 		except ValueError:
 			return None
-	
+
 	return None
 
 
+def get_total_balance(user_id: int) -> float:
+	"""Obtiene saldo combinado total del usuario (Discord + YouTube)."""
+	balance = get_user_balance_by_id(int(user_id))
+	if not balance.get("user_exists"):
+		return 0.0
+	return _round_amount(balance.get("global_points", 0.0))
 
+
+def apply_balance_delta(
+	user_id: int,
+	delta: float,
+	reason: str,
+	platform: str,
+	guild_id: Optional[str] = None,
+	channel_id: Optional[str] = None,
+	source_id: Optional[str] = None,
+) -> float:
+	"""Aplica un delta de saldo en wallet por plataforma y devuelve el total resultante."""
+	platform = str(platform or "discord").lower()
+	if platform not in SUPPORTED_PLATFORMS:
+		platform = "discord"
+
+	resolved_user_id = resolve_active_user_id(int(user_id))
+	delta = _round_amount(delta)
+	if delta == 0:
+		return get_total_balance(resolved_user_id)
+
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		now_iso = datetime.utcnow().isoformat()
+		conn.execute("BEGIN IMMEDIATE")
+
+		user_row = conn.execute(
+			"SELECT user_id FROM users WHERE user_id = ?",
+			(resolved_user_id,),
+		).fetchone()
+		if not user_row:
+			conn.rollback()
+			raise ValueError(f"Usuario no existe: {resolved_user_id}")
+
+		_ensure_platform_wallet_row(conn, resolved_user_id, "discord", now_iso)
+		_ensure_platform_wallet_row(conn, resolved_user_id, "youtube", now_iso)
+
+		if delta > 0:
+			new_total = _credit_platform_balance(conn, resolved_user_id, platform, delta, now_iso)
+		else:
+			ok = _deduct_from_combined_balance(
+				conn,
+				resolved_user_id,
+				abs(delta),
+				preferred_platform=platform,
+				now_iso=now_iso,
+			)
+			if not ok:
+				conn.rollback()
+				raise ValueError("Saldo insuficiente para aplicar el delta")
+			new_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
+
+		conn.execute(
+			"""
+			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			""",
+			(
+				resolved_user_id,
+				delta,
+				reason,
+				platform,
+				guild_id,
+				channel_id,
+				source_id,
+				now_iso,
+			),
+		)
+
+		conn.commit()
+		return _round_amount(new_total)
+	except Exception:
+		conn.rollback()
+		raise
+	finally:
+		conn.close()
 
 
 def transfer_points(
 	from_user_id: int,
 	to_user_id: int,
-	amount: int,
+	amount: float,
 	guild_id: Optional[str] = None,
-	platform: str = "discord"
+	platform: str = "discord",
 ) -> Dict[str, any]:
-	"""
-	Transfiere puntos de un usuario a otro de forma atómica.
-	
-	Args:
-		from_user_id: ID del usuario que envía puntos
-		to_user_id: ID del usuario que recibe puntos
-		amount: Cantidad de puntos a transferir (debe ser positiva)
-		guild_id: ID del servidor donde se realiza la transferencia
-		platform: Plataforma donde se realiza ("discord", "youtube", etc.)
-		
-	Returns:
-		Dict con:
-			- success: True si la transferencia fue exitosa
-			- error: Mensaje de error si falló
-			- from_balance: Balance final del remitente
-			- to_balance: Balance final del destinatario
-			
-	Example:
-		>>> result = transfer_points(42, 83, 100, guild_id="123456789")
-		>>> if result["success"]:
-		...     print(f"Transferencia exitosa. Balance final: {result['from_balance']}")
-	"""
+	"""Transfiere puntos usando saldo combinado (Discord + YouTube)."""
+	amount = _round_amount(amount)
 	if amount <= 0:
-		return {
-			"success": False,
-			"error": "La cantidad debe ser positiva",
-			"from_balance": None,
-			"to_balance": None
-		}
-	
+		return {"success": False, "error": "La cantidad debe ser positiva", "from_balance": None, "to_balance": None}
+
+	from_user_id = resolve_active_user_id(int(from_user_id))
+	to_user_id = resolve_active_user_id(int(to_user_id))
+
 	if from_user_id == to_user_id:
-		return {
-			"success": False,
-			"error": "No puedes transferir puntos a ti mismo",
-			"from_balance": None,
-			"to_balance": None
-		}
-	
+		return {"success": False, "error": "No puedes transferir puntos a ti mismo", "from_balance": None, "to_balance": None}
+
+	platform = str(platform or "discord").lower()
+	if platform not in SUPPORTED_PLATFORMS:
+		platform = "discord"
+
 	conn = get_connection()
 	try:
 		_ensure_wallet_tables(conn)
 		now_iso = datetime.utcnow().isoformat()
-		
 		conn.execute("BEGIN IMMEDIATE")
-		
-		# Verificar que ambos usuarios existen
-		from_user = conn.execute(
-			"SELECT user_id FROM users WHERE user_id = ?",
-			(from_user_id,)
-		).fetchone()
-		
-		to_user = conn.execute(
-			"SELECT user_id FROM users WHERE user_id = ?",
-			(to_user_id,)
-		).fetchone()
-		
+
+		from_user = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (from_user_id,)).fetchone()
+		to_user = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (to_user_id,)).fetchone()
 		if not from_user:
 			conn.rollback()
-			return {
-				"success": False,
-				"error": "El usuario remitente no existe",
-				"from_balance": None,
-				"to_balance": None
-			}
-		
+			return {"success": False, "error": "El usuario remitente no existe", "from_balance": None, "to_balance": None}
 		if not to_user:
 			conn.rollback()
-			return {
-				"success": False,
-				"error": "El usuario destinatario no existe",
-				"from_balance": None,
-				"to_balance": None
-			}
-		
-		# Crear wallets si no existen
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(from_user_id, now_iso, now_iso)
-		)
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(to_user_id, now_iso, now_iso)
-		)
-		
-		# Verificar balance del remitente
-		from_wallet = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(from_user_id,)
-		).fetchone()
-		
-		if not from_wallet or from_wallet["balance"] < amount:
+			return {"success": False, "error": "El usuario destinatario no existe", "from_balance": None, "to_balance": None}
+
+		for user_id in (from_user_id, to_user_id):
+			_ensure_platform_wallet_row(conn, user_id, "discord", now_iso)
+			_ensure_platform_wallet_row(conn, user_id, "youtube", now_iso)
+			_sync_wallet_total(conn, user_id, now_iso)
+
+		from_total = _sync_wallet_total(conn, from_user_id, now_iso)
+		if from_total < amount:
 			conn.rollback()
-			current_balance = from_wallet["balance"] if from_wallet else 0
 			return {
 				"success": False,
-				"error": f"Fondos insuficientes. Tienes {current_balance:,} puntos",
-				"from_balance": current_balance,
-				"to_balance": None
+				"error": f"Fondos insuficientes. Tienes {from_total:,.2f} puntos",
+				"from_balance": from_total,
+				"to_balance": None,
 			}
-		
-		# Restar puntos del remitente
-		conn.execute(
-			"UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ?",
-			(amount, now_iso, from_user_id)
-		)
-		
-		# Sumar puntos al destinatario
-		conn.execute(
-			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
-			(amount, now_iso, to_user_id)
-		)
-		
-		# Registrar transacción del remitente (gasto)
+
+		if not _deduct_from_combined_balance(conn, from_user_id, amount, platform, now_iso):
+			conn.rollback()
+			return {
+				"success": False,
+				"error": "No fue posible descontar el saldo combinado",
+				"from_balance": None,
+				"to_balance": None,
+			}
+
+		_credit_platform_balance(conn, to_user_id, platform, amount, now_iso)
+
 		conn.execute(
 			"""INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, created_at)
 			   VALUES (?, ?, ?, ?, ?, ?)""",
-			(from_user_id, -amount, f"transfer_to_user_{to_user_id}", platform, guild_id, now_iso)
+			(from_user_id, -amount, f"transfer_to_user_{to_user_id}", platform, guild_id, now_iso),
 		)
-		
-		# Registrar transacción del destinatario (ingreso)
 		conn.execute(
 			"""INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, created_at)
 			   VALUES (?, ?, ?, ?, ?, ?)""",
-			(to_user_id, amount, f"transfer_from_user_{from_user_id}", platform, guild_id, now_iso)
+			(to_user_id, amount, f"transfer_from_user_{from_user_id}", platform, guild_id, now_iso),
 		)
-		
-		# Obtener balances finales
-		from_balance = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(from_user_id,)
-		).fetchone()
-		
-		to_balance = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(to_user_id,)
-		).fetchone()
-		
+
+		from_balance = _sync_wallet_total(conn, from_user_id, now_iso)
+		to_balance = _sync_wallet_total(conn, to_user_id, now_iso)
 		conn.commit()
-		
+
 		return {
 			"success": True,
 			"error": None,
-			"from_balance": from_balance["balance"] if from_balance else 0,
-			"to_balance": to_balance["balance"] if to_balance else 0
+			"from_balance": from_balance,
+			"to_balance": to_balance,
 		}
-		
 	except Exception as e:
 		conn.rollback()
 		return {
 			"success": False,
 			"error": f"Error en la transferencia: {str(e)}",
 			"from_balance": None,
-			"to_balance": None
+			"to_balance": None,
 		}
 	finally:
 		conn.close()
 
 
 def get_user_transactions(user_id: int, limit: int = 50) -> List[Dict[str, any]]:
-	"""
-	Obtiene el historial de transacciones de un usuario.
-	
-	Args:
-		user_id: ID único universal del usuario
-		limit: Número máximo de transacciones a retornar
-		
-	Returns:
-		List[Dict]: Lista de transacciones ordenadas por fecha (más reciente primero)
-		
-	Example:
-		>>> txs = get_user_transactions(42, limit=10)
-		>>> for tx in txs:
-		...     print(f"{tx['created_at']}: {tx['amount']:+d} pts - {tx['reason']}")
-	"""
+	"""Obtiene historial de transacciones del usuario (ID activo)."""
+	user_id = resolve_active_user_id(int(user_id))
 	conn = get_connection()
 	try:
 		rows = conn.execute(
 			"""SELECT id, user_id, amount, reason, platform, guild_id, channel_id, created_at
-			   FROM wallet_ledger 
-			   WHERE user_id = ? 
-			   ORDER BY created_at DESC 
+			   FROM wallet_ledger
+			   WHERE user_id = ?
+			   ORDER BY created_at DESC
 			   LIMIT ?""",
-			(user_id, limit)
+			(user_id, limit),
 		).fetchall()
 		return [dict(row) for row in rows]
 	finally:
@@ -725,22 +652,10 @@ def get_user_transactions(user_id: int, limit: int = 50) -> List[Dict[str, any]]
 # ============================================================
 
 def get_global_leaderboard(limit: int = 10) -> List[Dict[str, any]]:
-	"""
-	Obtiene el top de usuarios con más puntos globales.
-	
-	Args:
-		limit: Número de usuarios a retornar
-		
-	Returns:
-		List[Dict]: Top usuarios ordenados por balance descendente
-		
-	Example:
-		>>> top = get_global_leaderboard(10)
-		>>> for i, user in enumerate(top, 1):
-		...     print(f"{i}. {user['username']}: {user['balance']:,} pts")
-	"""
+	"""Obtiene top global por balance total combinado."""
 	conn = get_connection()
 	try:
+		_ensure_wallet_tables(conn)
 		rows = conn.execute(
 			"""SELECT w.user_id, w.balance, u.username
 			   FROM wallets w
@@ -748,11 +663,8 @@ def get_global_leaderboard(limit: int = 10) -> List[Dict[str, any]]:
 			   WHERE w.balance > 0
 			   ORDER BY w.balance DESC
 			   LIMIT ?""",
-			(limit,)
+			(limit,),
 		).fetchall()
 		return [dict(row) for row in rows]
 	finally:
 		conn.close()
-
-
-

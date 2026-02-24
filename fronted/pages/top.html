@@ -215,6 +215,8 @@ const userList = document.getElementById('userList');
 const titleEl = document.querySelector('.leaderboard h1');
 const pointsHeaderEl = document.querySelector('.header-row > div:nth-child(4)');
 const avatarPlaceholder = '/media/items/avatar_placeholder.png';
+const TOP_REFRESH_MS = 10000;
+let isLoadingTop = false;
 
 const defaultCurrency = {
     name: 'pews',
@@ -287,6 +289,9 @@ function renderTop(items, currency = defaultCurrency) {
 }
 
 async function loadTop() {
+    if (isLoadingTop) return;
+    isLoadingTop = true;
+
     try {
         const response = await fetch('/api/economy/top10', { cache: 'no-store' });
         if (!response.ok) {
@@ -296,10 +301,13 @@ async function loadTop() {
         renderTop(payload.items || [], payload.currency || defaultCurrency);
     } catch (error) {
         userList.innerHTML = '<div class="empty-state">Error cargando el top 10.</div>';
+    } finally {
+        isLoadingTop = false;
     }
 }
 
 loadTop();
+setInterval(loadTop, TOP_REFRESH_MS);
 </script>
 
 </body>

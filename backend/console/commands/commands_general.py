@@ -147,6 +147,17 @@ async def cmd_help(ctx: CommandContext) -> None:
 	ctx.print("                   • discord off    - Apaga bot de Discord")
 	ctx.print("                   • discord status - Estado del bot de Discord")
 	ctx.print("                   • discord autorun- Alterna arranque automático")
+	ctx.print("  backup <subcmd> - Control del servicio backup")
+	ctx.print("                   • backup         - Alterna ON/OFF")
+	ctx.print("                   • backup on      - Enciende servicio backup")
+	ctx.print("                   • backup off     - Apaga servicio backup")
+	ctx.print("                   • backup status  - Estado del servicio backup")
+	ctx.print("                   • backup autorun - Alterna arranque automático")
+	ctx.print("                   • backup autosave interval <s>")
+	ctx.print("                   • backup autosave list")
+	ctx.print("                   • backup autosave run")
+	ctx.print("                   • backup autosave recovery <index>")
+	ctx.print("                   • backup autosave delete <index>")
 	ctx.print("  say <msg>      - Envia un mensaje a YouTube Live")
 	ctx.print("  yapi           - 🚀 Conecta YouTube e inicia listener (TODO EN UNO)")
 	ctx.print("  yt <subcmd>    - Comandos de YouTube API")
@@ -247,6 +258,12 @@ async def cmd_discord(ctx: CommandContext) -> None:
 	await cmd_discord_impl(ctx)
 
 
+async def cmd_backup(ctx: CommandContext) -> None:
+	"""Comando backup - ejecuta subcomandos para controlar el servicio backup."""
+	from .backup.general import cmd_backup as cmd_backup_impl
+	await cmd_backup_impl(ctx)
+
+
 async def cmd_livefeed(ctx: CommandContext) -> None:
 	"""Comando livefeed - gestiona whitelist de IP para livefeed."""
 	from .web.livefeed.ip_whitelist import cmd_livefeed as cmd_livefeed_impl
@@ -299,6 +316,7 @@ _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
 	"yapi": cmd_yapi,
 	"web": cmd_web,
 	"discord": cmd_discord,
+	"backup": cmd_backup,
 	"livefeed": cmd_livefeed,
 	"wsocket": cmd_wsocket,
 	"help": cmd_help,

@@ -24,6 +24,7 @@ from backend.managers.user_manager import (
     YouTubeProfile,
     User
 )
+from backend.managers.link_manager import resolve_active_user_id
 
 Platform = Literal["discord", "youtube", "global"]
 
@@ -272,10 +273,11 @@ def find_user_by_global_id(user_id: int) -> Optional[UserLookupResult]:
         >>> if user:
         ...     print(f"Usuario ID 42: {user.display_name}")
     """
-    user = get_user_by_id(user_id)
+    active_user_id = resolve_active_user_id(int(user_id))
+    user = get_user_by_id(active_user_id)
     if user:
         return UserLookupResult(
-            user_id=user_id,
+            user_id=active_user_id,
             platform="global",
             platform_id=str(user_id)
         )

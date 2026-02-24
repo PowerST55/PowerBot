@@ -97,7 +97,7 @@ def setup_economy_commands(bot: commands.Bot):
 	)
 	async def dar(
 		interaction: discord.Interaction,
-		cantidad: int,
+		cantidad: float,
 		target: Optional[discord.User] = None,
 		user_id: Optional[int] = None
 	):
@@ -116,6 +116,7 @@ def setup_economy_commands(bot: commands.Bot):
 		currency_symbol = economy_config.get_currency_symbol()
 		
 		# Validar cantidad positiva
+		cantidad = round(float(cantidad), 2)
 		if cantidad <= 0:
 			embed = discord.Embed(
 				title="❌ Cantidad inválida",
@@ -277,8 +278,8 @@ def setup_economy_commands(bot: commands.Bot):
 		embed = discord.Embed(
 			title="✅ Transferencia exitosa",
 			description=(
-				f"Has transferido **{cantidad:,} {currency_symbol}** a **{recipient_display_name}**\n\n"
-				f"💸 Tu nuevo balance: **{result['from_balance']:,} {currency_symbol}**"
+				f"Has transferido **{cantidad:,.2f} {currency_symbol}** a **{recipient_display_name}**\n\n"
+				f"💸 Tu nuevo balance: **{float(result['from_balance']):,.2f} {currency_symbol}**"
 			),
 			color=discord.Color.green()
 		)
@@ -294,8 +295,8 @@ def setup_economy_commands(bot: commands.Bot):
 				recipient_embed = discord.Embed(
 					title="💰 Has recibido puntos",
 					description=(
-						f"**{interaction.user.display_name}** te ha transferido **{cantidad:,} {currency_symbol}**\n\n"
-						f"💵 Tu nuevo balance: **{result['to_balance']:,} {currency_symbol}**"
+						f"**{interaction.user.display_name}** te ha transferido **{cantidad:,.2f} {currency_symbol}**\n\n"
+						f"💵 Tu nuevo balance: **{float(result['to_balance']):,.2f} {currency_symbol}**"
 					),
 					color=discord.Color.gold()
 				)

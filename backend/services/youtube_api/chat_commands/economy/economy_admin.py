@@ -5,8 +5,7 @@ Comandos administrativos de economía para chat de YouTube.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from backend.database import get_connection
 from backend.managers import economy_manager
@@ -57,7 +56,6 @@ async def process_admin_economy_command(
 
 	amount_token = args[-1]
 	query = " ".join(args[:-1]).strip()
-
 	if not query:
 		await send_chat_message(
 			client,
@@ -71,8 +69,7 @@ async def process_admin_economy_command(
 		await send_chat_message(client, live_chat_id, f"No encontré al usuario '{query}'.")
 		return True
 
-	balance = get_user_balance_by_id(lookup.user_id)
-	current_points = int(balance.get("global_points", 0)) if balance else 0
+	current_points = int(round(_get_current_balance(lookup.user_id)))
 
 	if command == "aps":
 		amount = _parse_positive_int(amount_token)
@@ -204,42 +201,15 @@ def _format_user_label(lookup: UserLookupResult) -> str:
 
 
 def _apply_balance_delta(user_id: int, delta: int, reason: str, message: YouTubeMessage) -> int:
-	conn = get_connection()
-	try:
-		economy_manager._ensure_wallet_tables(conn)
-		conn.execute("BEGIN IMMEDIATE")
+	new_total = economy_manager.apply_balance_delta(
+		user_id=user_id,
+		delta=float(delta),
+		reason=reason,
+		platform="youtube",
+		source_id=f"yt_admin:{message.id}:{reason}",
+	)
+	return int(round(new_total))
 
-		now_iso = datetime.utcnow().isoformat()
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(user_id, now_iso, now_iso),
-		)
 
-		conn.execute(
-			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
-			(delta, now_iso, user_id),
-		)
-
-		conn.execute(
-			"""
-			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""",
-			(
-				user_id,
-				delta,
-				reason,
-				"youtube",
-				None,
-				None,
-				f"yt_admin:{message.id}:{reason}",
-				now_iso,
-			),
-		)
-
-		row = conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (user_id,)).fetchone()
-		conn.commit()
-		return int(row["balance"]) if row else 0
-	finally:
-		conn.close()
+def _get_current_balance(user_id: int) -> float:
+	return float(economy_manager.get_total_balance(user_id))

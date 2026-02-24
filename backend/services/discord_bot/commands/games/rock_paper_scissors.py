@@ -3,14 +3,13 @@ Comandos de Piedra Papel Tijeras para PowerBot Discord.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Optional
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from backend.database import get_connection
 from backend.managers import get_or_create_discord_user
 from backend.managers import economy_manager
 from backend.services.activities import ppt_master
@@ -95,68 +94,22 @@ class PPTRematchView(discord.ui.View):
 
 def _get_current_balance(user_id: int) -> float:
 	"""Obtiene el balance actual de un usuario"""
-	conn = get_connection()
-	try:
-		economy_manager._ensure_wallet_tables(conn)
-		row = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(user_id,)
-		).fetchone()
-		return float(row["balance"]) if row else 0.0
-	finally:
-		conn.close()
+	return float(economy_manager.get_total_balance(user_id))
 
 
 def _apply_balance_delta(user_id: int, delta: float, reason: str, interaction: discord.Interaction) -> float:
 	"""Aplica un cambio al balance del usuario y registra la transacción"""
-	conn = get_connection()
-	try:
-		economy_manager._ensure_wallet_tables(conn)
-		conn.execute("BEGIN IMMEDIATE")
-		
-		now = datetime.now(timezone.utc).isoformat()
-		
-		# Asegurar que el wallet existe
-		conn.execute(
-			"INSERT INTO wallets (user_id, balance, created_at, updated_at) VALUES (?, 0, ?, ?) "
-			"ON CONFLICT(user_id) DO NOTHING",
-			(user_id, now, now)
+	return float(
+		economy_manager.apply_balance_delta(
+			user_id=user_id,
+			delta=delta,
+			reason=reason,
+			platform="discord",
+			guild_id=str(interaction.guild.id) if interaction.guild else None,
+			channel_id=str(interaction.channel.id) if interaction.channel else None,
+			source_id=f"ppt:{interaction.id}",
 		)
-		
-		# Actualizar balance
-		conn.execute(
-			"UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?",
-			(delta, now, user_id)
-		)
-		
-		# Registrar en ledger
-		conn.execute(
-			"""INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, created_at)
-			   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-			(
-				user_id,
-				delta,
-				reason,
-				"discord",
-				str(interaction.guild.id) if interaction.guild else None,
-				str(interaction.channel.id) if interaction.channel else None,
-				now
-			)
-		)
-		
-		# Obtener nuevo balance
-		row = conn.execute(
-			"SELECT balance FROM wallets WHERE user_id = ?",
-			(user_id,)
-		).fetchone()
-		
-		conn.commit()
-		return float(row["balance"]) if row else 0.0
-	except Exception:
-		conn.rollback()
-		raise
-	finally:
-		conn.close()
+	)
 
 
 async def play_ppt_game(
