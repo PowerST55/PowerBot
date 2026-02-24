@@ -348,7 +348,23 @@ function sendMessageToServer(message) {
         console.error("La conexión no está abierta, no se pudo enviar el mensaje.");
     }
 }
-socket = new WebSocket("ws://localhost:8765"); // Crear nueva conexión
+function buildWebSocketUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const directUrl = params.get("ws");
+    if (directUrl) {
+        return directUrl;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const host = params.get("wshost") || window.location.hostname || "104.128.49.50";
+    const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    const port = params.get("wsport") || (isLocalHost ? "8765" : "19131");
+    const path = params.get("wspath") || "/ws";
+    return `${protocol}://${host}:${port}${path}`;
+}
+
+const WS_URL = buildWebSocketUrl();
+socket = new WebSocket(WS_URL); // Crear nueva conexión
 function connect() {
     const joinSound = document.getElementById("join-sound");
 

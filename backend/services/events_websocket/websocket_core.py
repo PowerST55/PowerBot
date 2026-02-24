@@ -85,7 +85,7 @@ async def ws_events_root(ws: WebSocket) -> None:
 
 def run() -> None:
 	"""Arranca el servidor WebSocket local para la VM actual."""
-	host = os.getenv("WSOCKET_HOST", "127.0.0.1")
+	host = os.getenv("WSOCKET_HOST", "0.0.0.0")
 	port = int(os.getenv("WSOCKET_PORT", "8765"))
 	uvicorn.run("backend.services.events_websocket.websocket_core:app", host=host, port=port, reload=False)
 

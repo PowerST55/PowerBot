@@ -442,6 +442,23 @@
         let ws;
         let isConnecting = false;
         let reconnectAttempts = 0;
+
+        function buildWebSocketUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const directUrl = params.get("ws");
+            if (directUrl) {
+                return directUrl;
+            }
+
+            const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+            const host = params.get("wshost") || window.location.hostname || "104.128.49.50";
+            const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+            const port = params.get("wsport") || (isLocalHost ? "8765" : "19131");
+            const path = params.get("wspath") || "/ws";
+            return `${protocol}://${host}:${port}${path}`;
+        }
+
+        const WS_URL = buildWebSocketUrl();
         
         function connectWebSocket() {
             if (isConnecting) {
@@ -453,7 +470,7 @@
             console.log(`[WS] 🔄 Intentando conectar... (Intento #${reconnectAttempts + 1})`);
             
             try {
-                ws = new WebSocket('ws://localhost:8765');
+                ws = new WebSocket(WS_URL);
             } catch (error) {
                 console.error('[WS] ❌ Error creando WebSocket:', error);
                 isConnecting = false;
@@ -462,7 +479,7 @@
             }
 
             ws.addEventListener('open', () => {
-                console.log('[WS] ✅ Conectado a ws://localhost:8765');
+                console.log(`[WS] ✅ Conectado a ${WS_URL}`);
                 isConnecting = false;
                 reconnectAttempts = 0;
             });

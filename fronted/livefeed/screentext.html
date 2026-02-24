@@ -112,7 +112,16 @@
 }
 
         function connect() {
-            const socket = new WebSocket("ws://localhost:8765");
+            const params = new URLSearchParams(window.location.search);
+            const directUrl = params.get("ws");
+            const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+            const host = params.get("wshost") || window.location.hostname || "104.128.49.50";
+            const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+            const port = params.get("wsport") || (isLocalHost ? "8765" : "19131");
+            const path = params.get("wspath") || "/ws";
+            const wsUrl = directUrl || `${protocol}://${host}:${port}${path}`;
+
+            const socket = new WebSocket(wsUrl);
             socket.onopen = () => console.log("Conectado al WebSocket");
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
