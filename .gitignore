@@ -72,9 +72,13 @@ backend/keys/
 *.log
 logs/
 
-# Avatares generados/descargados
-media/dc_avatars/
-media/yt_avatars/
+# Avatares generados/descargados (solo carpeta vacía en repo)
+media/dc_avatars/*
+!media/dc_avatars/.gitkeep
+media/yt_avatars/*
+!media/yt_avatars/.gitkeep
+media/items/*
+!media/items/.gitkeep
 
 # Database
 *.db
