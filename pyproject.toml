@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "powerbot"
-version = "0.7.0-alpha"
+version = "0.8.0-alpha"
 description = "Sistema de consola interactivo asincrónico con prompt_toolkit"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
