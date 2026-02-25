@@ -59,6 +59,22 @@ def _format_timestamp(prefix: str) -> str:
 	return f"{prefix} • {now}"
 
 
+def _format_value(value: float, max_decimals: int = 2) -> str:
+	formatted = f"{value:,.{max_decimals}f}"
+	if "." in formatted:
+		formatted = formatted.rstrip("0").rstrip(".")
+	return formatted
+
+
+def _format_currency(value: float, currency_symbol: str) -> str:
+	amount = _format_value(value, max_decimals=2)
+	return f"{amount} {currency_symbol}".strip()
+
+
+def _format_probability(value: float) -> str:
+	return f"{_format_value(value, max_decimals=2)}%"
+
+
 def _get_rarity_color(probability: float) -> discord.Color:
 	"""
 	Reglas solicitadas por el usuario:
@@ -219,11 +235,18 @@ class MineView(discord.ui.View):
 			user_display = f"{interaction.user.mention}"
 		notify_embed = discord.Embed(
 			title="⛏️ Registro de mina",
-			description=f"{user_display} ha conseguido **{item_name}** por **{reward:,.2f}{currency_symbol}**",
+			description=(
+				f"{user_display} ha conseguido **{item_name}** "
+				f"por **{_format_currency(reward, currency_symbol)}**"
+			),
 			color=_get_rarity_color(probability),
 		)
-		notify_embed.add_field(name="🎲 Probabilidad", value=f"`{probability:.2f}%`", inline=True)
-		notify_embed.add_field(name="💰 Balance actual", value=f"`{new_balance:,.2f}{currency_symbol}`", inline=False)
+		notify_embed.add_field(name="🎲 Probabilidad", value=f"`{_format_probability(probability)}`", inline=True)
+		notify_embed.add_field(
+			name="💰 Balance actual",
+			value=f"`{_format_currency(new_balance, currency_symbol)}`",
+			inline=False,
+		)
 		notify_embed.set_footer(text=_format_timestamp("Mina"))
 
 		if interaction.channel is None:
@@ -303,7 +326,7 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 		color=discord.Color.blurple(),
 	)
 	# Cooldown destacado
-	embed.add_field(name="⏱️ Cooldown", value=f"`{_format_seconds(rate_seconds)}` por usuario", inline=True)
+	embed.add_field(name="⏱️ Tiempo de espera", value=f"`{_format_seconds(rate_seconds)}` por usuario", inline=True)
 
 	if items:
 		# Obtener símbolo de moneda
@@ -315,9 +338,12 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 			name = str(item.get("name") or "objeto")
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
-			preview_rows.append(f"• **{name}** — `{price:,.2f}{currency_symbol}` | `{prob:.2f}%`")
+			preview_rows.append(
+				f"• {name} — `{_format_currency(price, currency_symbol)}` | "
+				f"`{_format_probability(prob)}`"
+			)
 		embed.add_field(name="🪨 Tabla de minerales", value="\n".join(preview_rows), inline=False)
 
-	# Pie: cantidad de ítems disponibles
-	embed.set_footer(text=f"{len(items)} ítems disponibles")
+	# Pie: cantidad de minerales disponibles
+	embed.set_footer(text=f"{len(items)} minerales disponibles")
 	return embed
