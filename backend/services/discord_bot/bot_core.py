@@ -19,8 +19,14 @@ sys.path.insert(0, str(root_dir))
 # Inicializar base de datos
 from backend.database import init_database
 from backend.managers import get_or_create_discord_user
+from backend.managers.economy_manager import get_user_balance_by_discord_id
 from backend.services.discord_bot.economy.earning import process_message_earning, process_voice_earning_in_channel
-from backend.services.discord_bot.config.economy import EconomyConfig
+from backend.services.discord_bot.economy.economy_channel import (
+    notify_economy_progress_if_needed,
+    pop_external_platform_progress_events,
+    notify_external_platform_progress_all_guilds,
+)
+from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.discord_avatar_packager import DiscordAvatarPackager
 
 
@@ -43,6 +49,7 @@ class PowerBotDiscord(commands.Bot):
         self.start_time = None
         self.voice_earning_poll_seconds = 10
         self._voice_earning_task: asyncio.Task | None = None
+        self._external_economy_events_task: asyncio.Task | None = None
     
     async def setup_hook(self):
         """Se ejecuta al inicializar el bot (antes de on_ready)"""
@@ -86,6 +93,10 @@ class PowerBotDiscord(commands.Bot):
         # Registrar comandos de top economia
         from backend.services.discord_bot.commands.economy.top import setup_top_commands
         setup_top_commands(self)
+
+        # Registrar comandos de mina
+        from backend.services.discord_bot.commands.economy.mine_admin import setup_mine_commands
+        setup_mine_commands(self)
         
         # Registrar comandos de items
         from backend.services.discord_bot.commands.items.item_finder import setup_item_commands
@@ -126,10 +137,97 @@ class PowerBotDiscord(commands.Bot):
         
         print(f"✅ {self.user.name} está conectado")
         print(f"   Servidores: {len(self.guilds)}")
+        # Reanclar vistas persistentes (mina)
+        try:
+            from backend.services.discord_bot.economy.mine import MineView
+            await MineView.register_persistent(self)
+        except Exception as exc:
+            print(f"⚠️ No se pudo registrar la vista persistente de mina: {exc}")
+        await self._cleanup_deleted_earning_channels_all_guilds()
+        await self._backfill_existing_discord_progress()
+        if self._external_economy_events_task is None or self._external_economy_events_task.done():
+            self._external_economy_events_task = asyncio.create_task(self._external_economy_events_loop())
+            print("📣 Notificador de economía externa activado")
         if self._voice_earning_task is None or self._voice_earning_task.done():
             self._voice_earning_task = asyncio.create_task(self._voice_earning_loop())
             print("🎙️ Earning por llamada activado")
         print()
+
+    async def _external_economy_events_loop(self):
+        """Loop que consume eventos de economía externa (YouTube y otras plataformas)."""
+        while not self.is_closed():
+            try:
+                events = await asyncio.to_thread(pop_external_platform_progress_events, 100)
+                for event in events:
+                    platform = str(event.get("platform") or "unknown")
+                    platform_user_id = str(event.get("platform_user_id") or "unknown")
+                    previous_balance = float(event.get("previous_balance") or 0)
+                    new_balance = float(event.get("new_balance") or 0)
+
+                    await notify_external_platform_progress_all_guilds(
+                        bot=self,
+                        platform=platform,
+                        platform_user_id=platform_user_id,
+                        previous_balance=previous_balance,
+                        new_balance=new_balance,
+                    )
+            except Exception as e:
+                print(f"⚠️ Error en external economy events loop: {e}")
+
+            await asyncio.sleep(3)
+
+    async def _cleanup_deleted_earning_channels_all_guilds(self) -> None:
+        """Limpia earning_channels huérfanos (canales borrados) en todos los servidores."""
+        total_removed = 0
+        for guild in self.guilds:
+            try:
+                valid_channel_ids = [channel.id for channel in guild.text_channels]
+                economy_config = get_economy_config(guild.id)
+                removed = economy_config.prune_deleted_earning_channels(valid_channel_ids)
+                total_removed += removed
+                if removed > 0:
+                    print(
+                        f"🧹 Earning channels limpiados en {guild.name}: {removed} canal(es) borrado(s) removido(s)"
+                    )
+            except Exception as exc:
+                print(f"⚠️ Error limpiando earning channels en guild {guild.id}: {exc}")
+
+        if total_removed > 0:
+            print(f"🧹 Limpieza total de earning channels completada: {total_removed} eliminado(s)")
+
+    async def _backfill_existing_discord_progress(self) -> None:
+        """
+        Detecta usuarios existentes con saldo y dispara catch-up de hitos pendientes.
+        Esto permite marcar/notificar automáticamente usuarios que ya tienen 100, 400, 590, etc.
+        """
+        processed = 0
+        for guild in self.guilds:
+            try:
+                for member in guild.members:
+                    if member.bot:
+                        continue
+
+                    balance_info = await asyncio.to_thread(get_user_balance_by_discord_id, str(member.id))
+                    if not balance_info or not balance_info.get("user_exists"):
+                        continue
+
+                    current_balance = float(balance_info.get("global_points") or 0)
+                    if current_balance <= 0:
+                        continue
+
+                    await notify_economy_progress_if_needed(
+                        bot=self,
+                        guild_id=guild.id,
+                        discord_user_id=member.id,
+                        previous_balance=0,
+                        new_balance=current_balance,
+                    )
+                    processed += 1
+            except Exception as exc:
+                print(f"⚠️ Error en backfill de logros para guild {guild.id}: {exc}")
+
+        if processed > 0:
+            print(f"📈 Backfill de logros ejecutado para {processed} usuario(s)")
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Hook que se ejecuta ANTES de cualquier comando"""
@@ -164,6 +262,10 @@ class PowerBotDiscord(commands.Bot):
                     message.channel.id,
                 )
                 if result.get("awarded"):
+                    points_added = float(result.get("points_added") or 0)
+                    new_points = float(result.get("global_points") or 0)
+                    previous_points = new_points - points_added
+
                     print(
                         "💬 {user} en #{channel}: +{added} puntos (global: {global_points})".format(
                             user=message.author,
@@ -171,6 +273,13 @@ class PowerBotDiscord(commands.Bot):
                             added=result.get("points_added"),
                             global_points=result.get("global_points"),
                         )
+                    )
+                    await notify_economy_progress_if_needed(
+                        bot=self,
+                        guild_id=message.guild.id,
+                        discord_user_id=message.author.id,
+                        previous_balance=previous_points,
+                        new_balance=new_points,
                     )
         
         except Exception as e:
@@ -211,6 +320,10 @@ class PowerBotDiscord(commands.Bot):
                     )
 
                     if result.get("awarded"):
+                        points_added = float(result.get("points_added") or 0)
+                        new_points = float(result.get("global_points") or 0)
+                        previous_points = new_points - points_added
+
                         print(
                             "🎙️ {user} en llamada #{channel}: +{added} puntos (global: {global_points})".format(
                                 user=member,
@@ -218,6 +331,13 @@ class PowerBotDiscord(commands.Bot):
                                 added=result.get("points_added"),
                                 global_points=result.get("global_points"),
                             )
+                        )
+                        await notify_economy_progress_if_needed(
+                            bot=self,
+                            guild_id=guild.id,
+                            discord_user_id=member.id,
+                            previous_balance=previous_points,
+                            new_balance=new_points,
                         )
     
     async def _auto_register_user(self, user: discord.User):
@@ -269,7 +389,13 @@ class PowerBotDiscord(commands.Bot):
             bool: True si es earning_channel
         """
         try:
-            economy = EconomyConfig(guild_id)
+            guild = self.get_guild(int(guild_id))
+            valid_channel_ids = [channel.id for channel in guild.text_channels] if guild else []
+
+            economy = get_economy_config(guild_id)
+            if valid_channel_ids:
+                economy.prune_deleted_earning_channels(valid_channel_ids)
+
             earning_channels = economy.get_earning_channels()
             return channel_id in earning_channels
         except Exception as e:
@@ -278,6 +404,17 @@ class PowerBotDiscord(commands.Bot):
 
     async def close(self):
         """Cierre limpio del bot y tareas en background."""
+        if self._external_economy_events_task and not self._external_economy_events_task.done():
+            self._external_economy_events_task.cancel()
+            try:
+                await self._external_economy_events_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                print(f"⚠️ Error cerrando external economy events task: {e}")
+            finally:
+                self._external_economy_events_task = None
+
         if self._voice_earning_task and not self._voice_earning_task.done():
             self._voice_earning_task.cancel()
             try:

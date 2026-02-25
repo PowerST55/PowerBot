@@ -232,11 +232,24 @@ async def cmd_youtube_yapi(ctx: CommandContext) -> None:
         async def _earning_handler(message):
             try:
                 from backend.services.youtube_api.economy.earning import process_message_earning
-                process_message_earning(
+                from backend.services.discord_bot.economy.economy_channel import enqueue_external_platform_progress_event
+
+                result = process_message_earning(
                     youtube_channel_id=message.author_channel_id,
                     live_chat_id=live_chat_id,
                     source_id=message.id or None,
                 )
+
+                if result.get("awarded"):
+                    points_added = float(result.get("points_added") or 0)
+                    new_points = float(result.get("global_points") or 0)
+                    previous_points = new_points - points_added
+                    enqueue_external_platform_progress_event(
+                        platform="youtube",
+                        platform_user_id=str(message.author_channel_id),
+                        previous_balance=previous_points,
+                        new_balance=new_points,
+                    )
             except Exception as exc:
                 console.print(f"[warning]⚠ Error en earning YouTube: {exc}[/warning]")
 

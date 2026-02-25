@@ -23,6 +23,7 @@ class ChannelsConfig:
         self._defaults = {
             "confession_channel": None,
             "logs_channel": None,
+            "economy_channel": None,
             "music_channel": None,
             "commands_channel": None,
             "afk_voice_channel": None,

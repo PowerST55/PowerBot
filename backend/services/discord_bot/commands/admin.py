@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from backend.services.discord_bot.config import get_channels_config, get_economy_config
+from backend.services.discord_bot.config.mine_config import get_mine_config
 from backend.services.discord_bot.config.roles import get_roles_config
 from backend.services.discord_bot.bot_logging import log_info, log_success
 
@@ -56,6 +57,8 @@ def setup_admin_commands(bot: commands.Bot):
     @app_commands.choices(tipo=[
         app_commands.Choice(name="Confesiones", value="confession"),
         app_commands.Choice(name="Logs", value="logs"),
+        app_commands.Choice(name="Economía", value="economy"),
+        app_commands.Choice(name="Mina", value="mine"),
     ])
     async def set_channel(interaction: discord.Interaction, tipo: app_commands.Choice[str], channel: discord.TextChannel):
         """Configura canales del servidor - Solo administradores"""
@@ -71,32 +74,36 @@ def setup_admin_commands(bot: commands.Bot):
             return
         
         try:
-            # Obtener configuración de canales
-            channels_config = get_channels_config(interaction.guild.id)
-            
             # Mapear tipos a nombres de configuración
             channel_map = {
                 "confession": "confession_channel",
                 "logs": "logs_channel",
+                "economy": "economy_channel",
             }
             
-            config_name = channel_map.get(tipo.value)
-            if not config_name:
-                embed = discord.Embed(
-                    title="❌ Error",
-                    description="Tipo de canal no reconocido.",
-                    color=discord.Color.red()
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
-            
             # Guardar el canal
-            channels_config.set_channel(config_name, channel.id)
+            if tipo.value == "mine":
+                mine_config = get_mine_config(interaction.guild.id)
+                mine_config.set_mine_channel_id(channel.id)
+            else:
+                channels_config = get_channels_config(interaction.guild.id)
+                config_name = channel_map.get(tipo.value)
+                if not config_name:
+                    embed = discord.Embed(
+                        title="❌ Error",
+                        description="Tipo de canal no reconocido.",
+                        color=discord.Color.red()
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
+                channels_config.set_channel(config_name, channel.id)
             
             # Mapear tipos a nombres amigables
             tipo_nombre = {
                 "confession": "Confesiones",
                 "logs": "Logs",
+                "economy": "Economía",
+                "mine": "Mina",
             }
             
             embed = discord.Embed(
@@ -357,6 +364,8 @@ def setup_admin_commands(bot: commands.Bot):
         
         try:
             economy_config = get_economy_config(interaction.guild.id)
+            valid_text_channel_ids = [text_channel.id for text_channel in interaction.guild.text_channels]
+            removed_stale = economy_config.prune_deleted_earning_channels(valid_text_channel_ids)
             
             if accion.value == "add":
                 # Agregar canal
@@ -440,6 +449,13 @@ def setup_admin_commands(bot: commands.Bot):
                     description="Canales donde se ganan puntos hablando",
                     color=discord.Color.blue()
                 )
+
+                if removed_stale > 0:
+                    embed.add_field(
+                        name="🧹 Limpieza automática",
+                        value=f"Se eliminaron `{removed_stale}` canal(es) borrados de la configuración.",
+                        inline=False,
+                    )
                 
                 earning_channels = economy_config.get_earning_channels()
                 if earning_channels:

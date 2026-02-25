@@ -4,13 +4,16 @@ Funciones robustas para consultar y gestionar puntos en todas las plataformas.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional, List
 
 from backend.database import get_connection
 from backend.managers.link_manager import resolve_active_user_id
 from backend.managers.user_manager import (
 	get_discord_profile_by_discord_id,
+	get_discord_profile_by_user_id,
 	get_youtube_profile_by_channel_id,
 )
 
@@ -19,6 +22,42 @@ SUPPORTED_PLATFORMS = ("discord", "youtube")
 
 def _round_amount(value: float | int) -> float:
 	return round(float(value), 2)
+
+
+def _enqueue_progress_event(
+	platform: str,
+	platform_user_id: str,
+	previous_balance: float,
+	new_balance: float,
+) -> None:
+	"""Encola eventos de progreso económico para que Discord los publique en economy_channel."""
+	try:
+		data_dir = Path(__file__).resolve().parents[1] / "data" / "discord_bot"
+		queue_file = data_dir / "economy_external_events.json"
+		data_dir.mkdir(parents=True, exist_ok=True)
+
+		event = {
+			"platform": str(platform).strip().lower(),
+			"platform_user_id": str(platform_user_id).strip(),
+			"previous_balance": float(previous_balance),
+			"new_balance": float(new_balance),
+		}
+
+		queue: list[dict] = []
+		if queue_file.exists():
+			try:
+				with open(queue_file, "r", encoding="utf-8") as file:
+					loaded = json.load(file)
+					if isinstance(loaded, list):
+						queue = loaded
+			except Exception:
+				queue = []
+
+		queue.append(event)
+		with open(queue_file, "w", encoding="utf-8") as file:
+			json.dump(queue, file, indent=2, ensure_ascii=False)
+	except Exception:
+		pass
 
 
 def _ensure_earning_cooldown_table(conn) -> None:
@@ -491,6 +530,7 @@ def apply_balance_delta(
 
 		_ensure_platform_wallet_row(conn, resolved_user_id, "discord", now_iso)
 		_ensure_platform_wallet_row(conn, resolved_user_id, "youtube", now_iso)
+		previous_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
 
 		if delta > 0:
 			new_total = _credit_platform_balance(conn, resolved_user_id, platform, delta, now_iso)
@@ -525,7 +565,19 @@ def apply_balance_delta(
 		)
 
 		conn.commit()
-		return _round_amount(new_total)
+
+		final_total = _round_amount(new_total)
+		if platform == "discord":
+			discord_profile = get_discord_profile_by_user_id(resolved_user_id)
+			if discord_profile and getattr(discord_profile, "discord_id", None):
+				_enqueue_progress_event(
+					platform="discord",
+					platform_user_id=str(discord_profile.discord_id),
+					previous_balance=_round_amount(previous_total),
+					new_balance=final_total,
+				)
+
+		return final_total
 	except Exception:
 		conn.rollback()
 		raise
@@ -610,6 +662,25 @@ def transfer_points(
 		from_balance = _sync_wallet_total(conn, from_user_id, now_iso)
 		to_balance = _sync_wallet_total(conn, to_user_id, now_iso)
 		conn.commit()
+
+		if platform == "discord":
+			from_profile = get_discord_profile_by_user_id(from_user_id)
+			if from_profile and getattr(from_profile, "discord_id", None):
+				_enqueue_progress_event(
+					platform="discord",
+					platform_user_id=str(from_profile.discord_id),
+					previous_balance=_round_amount(from_balance + amount),
+					new_balance=_round_amount(from_balance),
+				)
+
+			to_profile = get_discord_profile_by_user_id(to_user_id)
+			if to_profile and getattr(to_profile, "discord_id", None):
+				_enqueue_progress_event(
+					platform="discord",
+					platform_user_id=str(to_profile.discord_id),
+					previous_balance=_round_amount(to_balance - amount),
+					new_balance=_round_amount(to_balance),
+				)
 
 		return {
 			"success": True,

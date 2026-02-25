@@ -20,6 +20,8 @@ from backend.services.backup.mysql_client import connect_mysql, load_mysql_confi
 def test_mysql_connection() -> Tuple[bool, str]:
 	"""Prueba la conexión y ejecuta SELECT 1."""
 	cfg = load_mysql_config()
+	if not cfg.database:
+		return False, "Falta nombre de base de datos MySQL (BACKUP_DB_NAME/MYSQL_DATABASE/DB_NAME)."
 	conn = None
 	try:
 		conn, driver = connect_mysql(cfg)
@@ -30,7 +32,7 @@ def test_mysql_connection() -> Tuple[bool, str]:
 			cursor.close()
 		except Exception:
 			pass
-		return True, f"Conectado a MySQL ({driver}) en {cfg.host}:{cfg.port} | ping={row}"
+		return True, f"Conectado a MySQL ({driver}) en {cfg.host}:{cfg.port}/{cfg.database} | ping={row}"
 	except Exception as exc:
 		return False, f"Error conectando MySQL {cfg.host}:{cfg.port}: {exc}"
 	finally:

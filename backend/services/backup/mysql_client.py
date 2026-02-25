@@ -12,10 +12,8 @@ from typing import Any
 from dotenv import load_dotenv
 
 
-DEFAULT_MYSQL_HOST = "panther.teramont.net"
+DEFAULT_MYSQL_HOST = "localhost"
 DEFAULT_MYSQL_PORT = 3306
-DEFAULT_MYSQL_USER = "u4130_wkNOuSaty4"
-DEFAULT_MYSQL_PASSWORD = "rGXKte2!GaZ!vNewtild+Pry"
 
 
 @dataclass
@@ -72,13 +70,11 @@ def load_mysql_config() -> MySQLConfig:
 		os.getenv("BACKUP_DB_USER")
 		or os.getenv("MYSQL_USER")
 		or os.getenv("DB_USER")
-		or DEFAULT_MYSQL_USER
 	)
 	password = (
 		os.getenv("BACKUP_DB_PASSWORD")
 		or os.getenv("MYSQL_PASSWORD")
 		or os.getenv("DB_PASSWORD")
-		or DEFAULT_MYSQL_PASSWORD
 	)
 	database = (
 		os.getenv("BACKUP_DB_NAME")
@@ -86,6 +82,11 @@ def load_mysql_config() -> MySQLConfig:
 		or os.getenv("DB_NAME")
 	)
 	timeout = int(os.getenv("BACKUP_DB_TIMEOUT", "8"))
+
+	if not user:
+		raise ValueError("Falta usuario MySQL. Define BACKUP_DB_USER/MYSQL_USER/DB_USER en backend/keys/.env")
+	if not password:
+		raise ValueError("Falta password MySQL. Define BACKUP_DB_PASSWORD/MYSQL_PASSWORD/DB_PASSWORD en backend/keys/.env")
 
 	return MySQLConfig(
 		host=host,

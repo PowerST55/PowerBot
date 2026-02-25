@@ -161,6 +161,35 @@ class EconomyConfig:
         self._config["earning_channels"] = []
         self._save()
 
+    def prune_deleted_earning_channels(self, valid_channel_ids: list[int] | set[int]) -> int:
+        """
+        Elimina de data los earning_channels que ya no existen en el servidor.
+
+        Args:
+            valid_channel_ids: IDs de canales válidos actualmente en Discord.
+
+        Returns:
+            int: cantidad de canales eliminados de la configuración.
+        """
+        valid_ids = {int(channel_id) for channel_id in valid_channel_ids}
+        current_channels = self._config.get("earning_channels", [])
+        normalized_current: list[int] = []
+
+        for channel_id in current_channels:
+            try:
+                normalized_current.append(int(channel_id))
+            except Exception:
+                continue
+
+        filtered_channels = [channel_id for channel_id in normalized_current if channel_id in valid_ids]
+        removed_count = len(normalized_current) - len(filtered_channels)
+
+        if removed_count > 0:
+            self._config["earning_channels"] = filtered_channels
+            self._save()
+
+        return removed_count
+
 
 class EconomyManager:
     """Gestiona economía de múltiples servidores"""
