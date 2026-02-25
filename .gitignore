@@ -48,7 +48,12 @@ desktop.ini
 $RECYCLE.BIN/
 
 # Datos sensibles
+data/
+backend/data/
 keys/
+backend/keys/
+!backend/keys/.gitkeep
+!backend/keys/README.md
 .env
 .env.*
 !.env.example
