@@ -13,8 +13,8 @@ CONFIG_FILE = DATA_DIR / "games_config.json"
 
 
 DEFAULT_CONFIG = {
-	"gamble": {"limit": 0.0, "cooldown": 0},
-	"slots": {"limit": 0.0, "cooldown": 0},
+	"gamble": {"min_limit": 0.0, "max_limit": 0.0, "cooldown": 0},
+	"slots": {"min_limit": 0.0, "max_limit": 0.0, "cooldown": 0},
 }
 
 
@@ -35,23 +35,47 @@ def _save_config(config: Dict[str, Dict[str, float]]) -> None:
 		json.dump(config, handle, indent=2, ensure_ascii=False)
 
 
-def set_gamble_config(limit: float, cooldown: int) -> Dict[str, float]:
+def set_gamble_config(min_limit: float, max_limit: float, cooldown: int) -> Dict[str, float]:
 	config = _load_config()
-	config["gamble"] = {"limit": float(limit), "cooldown": int(cooldown)}
+	config["gamble"] = {
+		"min_limit": float(min_limit or 0.0),
+		"max_limit": float(max_limit or 0.0),
+		"cooldown": int(cooldown),
+	}
 	_save_config(config)
 	return config["gamble"].copy()
 
 
-def set_slots_config(limit: float, cooldown: int) -> Dict[str, float]:
+def set_slots_config(min_limit: float, max_limit: float, cooldown: int) -> Dict[str, float]:
 	config = _load_config()
-	config["slots"] = {"limit": float(limit), "cooldown": int(cooldown)}
+	config["slots"] = {
+		"min_limit": float(min_limit or 0.0),
+		"max_limit": float(max_limit or 0.0),
+		"cooldown": int(cooldown),
+	}
 	_save_config(config)
 	return config["slots"].copy()
 
 
 def get_gamble_config() -> Dict[str, float]:
-	return _load_config().get("gamble", DEFAULT_CONFIG["gamble"]).copy()
+	config = _load_config().get("gamble", DEFAULT_CONFIG["gamble"]).copy()
+	# Compatibilidad con formato antiguo donde solo existia "limit"
+	if "limit" in config and "max_limit" not in config:
+		config["max_limit"] = float(config.pop("limit") or 0.0)
+	if "min_limit" not in config:
+		config["min_limit"] = 0.0
+	if "cooldown" not in config:
+		config["cooldown"] = 0
+	return config
 
 
 def get_slots_config() -> Dict[str, float]:
-	return _load_config().get("slots", DEFAULT_CONFIG["slots"]).copy()
+	config = _load_config().get("slots", DEFAULT_CONFIG["slots"]).copy()
+	# Compatibilidad con formato antiguo donde solo existia "limit"
+	if "limit" in config and "max_limit" not in config:
+		config["max_limit"] = float(config.pop("limit") or 0.0)
+	if "min_limit" not in config:
+		config["min_limit"] = 0.0
+	if "cooldown" not in config:
+		config["cooldown"] = 0
+	return config

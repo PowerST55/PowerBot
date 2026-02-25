@@ -43,8 +43,9 @@ async def _run_slots(interaction: discord.Interaction, cantidad: str) -> None:
 
 	# Cargar configuracion de slots
 	config = games_config.get_slots_config()
-	limit = config.get("limit", 0.0)
-	cooldown_seconds = config.get("cooldown", 0)
+	min_limit = float(config.get("min_limit", 0.0) or 0.0)
+	max_limit = float(config.get("max_limit", 0.0) or 0.0)
+	cooldown_seconds = int(config.get("cooldown", 0) or 0)
 
 	# Verificar cooldown
 	can_play, remaining = cooldown_manager.check_cooldown(
@@ -61,9 +62,14 @@ async def _run_slots(interaction: discord.Interaction, cantidad: str) -> None:
 		await interaction.response.send_message(error, ephemeral=True)
 		return
 
-	# Verificar limite
-	if limit > 0 and bet_amount > limit:
-		await _send_limit_error(interaction, bet_amount, limit, currency_symbol)
+	# Verificar limite inferior
+	if min_limit > 0 and bet_amount < min_limit:
+		await _send_min_limit_error(interaction, bet_amount, min_limit, currency_symbol)
+		return
+
+	# Verificar limite superior
+	if max_limit > 0 and bet_amount > max_limit:
+		await _send_limit_error(interaction, bet_amount, max_limit, currency_symbol)
 		return
 
 	insufficient = _ensure_sufficient_balance(
@@ -232,6 +238,23 @@ async def _send_limit_error(
 		title="❌ Limite excedido",
 		description=(
 			f"La apuesta maxima es **{int(limit):,}{currency_symbol}**.\n"
+			f"Intentaste apostar **{bet_amount:,}{currency_symbol}**."
+		),
+		color=discord.Color.red()
+	)
+	await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+async def _send_min_limit_error(
+	interaction: discord.Interaction,
+	bet_amount: int,
+	min_limit: float,
+	currency_symbol: str
+) -> None:
+	embed = discord.Embed(
+		title="❌ Apuesta demasiado baja",
+		description=(
+			f"La apuesta minima es **{int(min_limit):,}{currency_symbol}**.\n"
 			f"Intentaste apostar **{bet_amount:,}{currency_symbol}**."
 		),
 		color=discord.Color.red()
