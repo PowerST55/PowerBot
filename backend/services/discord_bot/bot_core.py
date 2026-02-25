@@ -26,6 +26,8 @@ from backend.services.discord_bot.economy.economy_channel import (
     pop_external_platform_progress_events,
     notify_external_platform_progress_all_guilds,
 )
+from backend.services.activities.taxes.taxes_master import collect_due_taxes
+from backend.managers.user_lookup_manager import get_user_platform_ids
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.discord_avatar_packager import DiscordAvatarPackager
 
@@ -122,6 +124,9 @@ class PowerBotDiscord(commands.Bot):
 
         from backend.services.discord_bot.commands.games.games_admin import setup_games_admin_commands
         setup_games_admin_commands(self)
+
+        from backend.services.discord_bot.commands.games.taxes_admin import setup_taxes_admin_commands
+        setup_taxes_admin_commands(self)
         
         # Sincronizar comandos slash
         try:
@@ -148,6 +153,9 @@ class PowerBotDiscord(commands.Bot):
         if self._external_economy_events_task is None or self._external_economy_events_task.done():
             self._external_economy_events_task = asyncio.create_task(self._external_economy_events_loop())
             print("📣 Notificador de economía externa activado")
+        if getattr(self, "_taxes_task", None) is None or getattr(self, "_taxes_task").done():
+            self._taxes_task = asyncio.create_task(self._taxes_loop())
+            print("💸 Loop de impuestos activado")
         if self._voice_earning_task is None or self._voice_earning_task.done():
             self._voice_earning_task = asyncio.create_task(self._voice_earning_loop())
             print("🎙️ Earning por llamada activado")
@@ -175,6 +183,68 @@ class PowerBotDiscord(commands.Bot):
                 print(f"⚠️ Error en external economy events loop: {e}")
 
             await asyncio.sleep(3)
+
+    async def _taxes_loop(self):
+        """Loop periódico que cobra impuestos y notifica en economy_channel.
+
+        Se ejecuta cada ~60 segundos y delega el cálculo de impuestos a
+        backend.services.activities.livefeed.taxes.taxes_master.collect_due_taxes.
+        """
+        while not self.is_closed():
+            try:
+                charges = await asyncio.to_thread(collect_due_taxes)
+                if not charges:
+                    await asyncio.sleep(60)
+                    continue
+
+                for charge in charges:
+                    # Para notificar en todos los servidores que tengan economy_channel
+                    for guild in self.guilds:
+                        from backend.services.discord_bot.config import get_channels_config
+
+                        channels_config = get_channels_config(guild.id)
+                        economy_channel_id = channels_config.get_channel("economy_channel")
+                        if not economy_channel_id:
+                            continue
+
+                        channel = guild.get_channel(int(economy_channel_id)) or self.get_channel(
+                                int(economy_channel_id)
+                            )
+                        if not isinstance(channel, discord.TextChannel):
+                            continue
+
+                        from backend.services.discord_bot.config.economy import get_economy_config
+
+                        economy_config = get_economy_config(guild.id)
+                        currency_symbol = economy_config.get_currency_symbol()
+
+                        # Intentar obtener el Discord ID a partir del user_id global
+                        mention = "@usuario"
+                        try:
+                            platform_ids = get_user_platform_ids(charge.user_id)
+                            discord_id = platform_ids.get("discord") if platform_ids else None
+                            if discord_id:
+                                mention = f"<@{discord_id}>"
+                        except Exception:
+                            pass
+
+                        amount_str = f"{charge.amount:,.2f}{currency_symbol}"
+                        new_balance_str = f"{charge.new_balance:,.2f}{currency_symbol}"
+                        percent_str = f"{charge.percent:.2f}%"
+
+                        message = (
+                            f"💸 Impuesto cobrado a `ID:{charge.user_id}` {mention} "
+                            f"-{amount_str} (impuestos: {percent_str}) "
+                            f"Ahora tiene: {new_balance_str}"
+                        )
+                        if charge.reason:
+                            message += f" Motivo: \"{charge.reason}\""
+
+                        await channel.send(message)
+            except Exception as e:
+                print(f"⚠️ Error en loop de impuestos: {e}")
+
+            await asyncio.sleep(60)
 
     async def _cleanup_deleted_earning_channels_all_guilds(self) -> None:
         """Limpia earning_channels huérfanos (canales borrados) en todos los servidores."""
