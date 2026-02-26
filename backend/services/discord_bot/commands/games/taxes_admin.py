@@ -16,12 +16,18 @@ Reglas:
 from __future__ import annotations
 
 from typing import Optional
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from backend.managers import get_or_create_discord_user
+from backend.managers.user_lookup_manager import (
+	find_user_by_global_id,
+	get_user_platform_ids,
+)
+from backend.managers.economy_manager import get_global_leaderboard
 from backend.services.activities.taxes import taxes_config
 from backend.services.discord_bot.bot_logging import log_economy
 
@@ -122,9 +128,9 @@ def setup_taxes_admin_commands(bot: commands.Bot) -> None:
 			f"Intervalo: `{new_tax.interval_seconds}s`",
 		]
 		if target_type == "user":
-			user_label = f"ID global {target_user_id}"
+			user_label = f"`ID:{target_user_id}`"
 			if target_user is not None:
-				user_label = f"{target_user.mention} (ID global {target_user_id})"
+				user_label = f"{target_user.mention} (`ID:{target_user_id}`)"
 			desc_lines.append(f"Objetivo: {user_label}")
 		else:
 			desc_lines.append(f"Objetivo: Top {new_tax.target_top_rank} global")
@@ -205,24 +211,49 @@ def setup_taxes_admin_commands(bot: commands.Bot) -> None:
 			await interaction.response.send_message(embed=embed, ephemeral=True)
 			return
 
-		desc_lines = []
-		for tax in all_taxes[:20]:
-			line = f"`{tax.id}` — {tax.percent:.2f}% cada {tax.interval_seconds}s — "
-			if tax.target_type == "user" and tax.target_user_id is not None:
-				line += f"usuario ID {tax.target_user_id}"
-			elif tax.target_type == "top" and tax.target_top_rank is not None:
-				line += f"Top {tax.target_top_rank} global"
-			else:
-				line += "objetivo desconocido"
-			if tax.reason:
-				line += f" — {tax.reason}"
-			desc_lines.append(line)
-
+		now_ts = datetime.now(timezone.utc).timestamp()
 		embed = discord.Embed(
 			title="Impuestos configurados",
-			description="\n".join(desc_lines),
 			color=discord.Color.blurple(),
 		)
+
+		guild = interaction.guild
+		for tax in all_taxes[:20]:
+			# Título del campo: ID + resumen corto
+			interval_human = _format_interval_short(tax.interval_seconds)
+			field_name = f"{tax.id} — {tax.percent:.2f}% cada {interval_human}"
+
+			# Resolver objetivo actual (ID universal + posible @usuario)
+			if tax.target_type == "user" and tax.target_user_id is not None:
+				objective = _describe_global_user(tax.target_user_id, guild)
+				objective_prefix = "Usuario asignado"
+			elif tax.target_type == "top" and tax.target_top_rank is not None:
+				current_user_label = _describe_top_user(tax.target_top_rank, guild)
+				objective_prefix = f"Top {tax.target_top_rank} global"
+				objective = current_user_label
+			else:
+				objective_prefix = "Objetivo desconocido"
+				objective = "-"
+
+			# Próximo cobro (tiempo restante)
+			remaining_label = _format_next_run(
+				now_ts, tax.interval_seconds, tax.last_run, tax.percent
+			)
+
+			lines: list[str] = [
+				f"**Selector:** {objective_prefix}",
+				f"**Objetivo actual:** {objective}",
+				f"**Próximo cobro:** {remaining_label}",
+			]
+			if tax.reason:
+				lines.append(f"**Razón:** {tax.reason}")
+
+			embed.add_field(
+				name=field_name,
+				value="\n".join(lines),
+				inline=False,
+			)
+
 		await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -257,4 +288,93 @@ async def _send_error(interaction: discord.Interaction, message: str) -> None:
 		color=discord.Color.red(),
 	)
 	await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+def _format_interval_short(seconds: int) -> str:
+	"""Convierte segundos en un texto corto (ej: 1h 20m, 45s)."""
+	try:
+		seconds_int = int(seconds)
+	except Exception:
+		seconds_int = 0
+	if seconds_int <= 0:
+		return "0s"
+	mins, secs = divmod(seconds_int, 60)
+	if mins == 0:
+		return f"{secs}s"
+	hours, mins = divmod(mins, 60)
+	parts: list[str] = []
+	if hours:
+		parts.append(f"{hours}h")
+	if mins:
+		parts.append(f"{mins}m")
+	if not parts:
+		parts.append(f"{secs}s")
+	return " ".join(parts)
+
+
+def _format_next_run(now_ts: float, interval_seconds: int, last_run: float, percent: float) -> str:
+	"""Texto legible de cuánto falta para el próximo cobro."""
+	if interval_seconds <= 0 or percent <= 0:
+		return "No se cobrará (intervalo/porcentaje inválido)"
+
+	if last_run <= 0:
+		# Nunca se ha cobrado, está listo para ejecutarse cuando el scheduler quiera
+		return "Listo para cobrarse (nunca se ha cobrado)"
+
+	elapsed = max(0.0, float(now_ts) - float(last_run))
+	remaining = int(interval_seconds - elapsed)
+	if remaining <= 0:
+		return "Listo para cobrarse"
+	return f"En {_format_interval_short(remaining)}"
+
+
+def _describe_global_user(global_user_id: int | str, guild: discord.Guild | None) -> str:
+	"""Devuelve una etiqueta tipo 'ID:1234 @user (Nombre)' para un usuario global."""
+	try:
+		uid = int(global_user_id)
+	except Exception:
+		return f"ID:? (usuario desconocido)"
+
+	# ID en formato de código para que se vea más estético en Discord
+	label_parts: list[str] = [f"`ID:{uid}`"]
+
+	lookup = None
+	try:
+		lookup = find_user_by_global_id(uid)
+	except Exception:
+		lookup = None
+	if lookup is not None and getattr(lookup, "display_name", None):
+		label_parts.append(str(lookup.display_name))
+
+	# Intentar obtener Discord ID para mostrar @mención
+	discord_id: str | None = None
+	try:
+		platform_ids = get_user_platform_ids(uid)
+		discord_id = platform_ids.get("discord")
+	except Exception:
+		discord_id = None
+
+	if discord_id:
+		label_parts.append(f"<@{discord_id}>")
+
+	return " ".join(label_parts)
+
+
+def _describe_top_user(rank: int, guild: discord.Guild | None) -> str:
+	"""Devuelve etiqueta para el usuario actual en el Top N global."""
+	try:
+		limit = max(1, int(rank))
+	except Exception:
+		return "(Top sin datos)"
+
+	try:
+		rows = get_global_leaderboard(limit=limit)
+		if not rows or len(rows) < limit:
+			return "(Top sin usuario activo)"
+		row = rows[limit - 1]
+		uid = int(row.get("user_id"))
+		user_label = _describe_global_user(uid, guild)
+		return user_label
+	except Exception:
+		return "(Error obteniendo usuario Top)"
 

@@ -17,6 +17,10 @@ import discord
 
 from backend.services.discord_bot.config import get_channels_config
 from backend.services.discord_bot.config.economy import get_economy_config
+from backend.managers.user_lookup_manager import (
+	find_user_by_discord_id,
+	find_user,
+)
 
 
 MILESTONE_LEVELS = [
@@ -192,6 +196,22 @@ async def notify_economy_progress_if_needed(
 		currency_name = economy_config.get_currency_name()
 		currency_symbol = economy_config.get_currency_symbol()
 
+		# Resolver ID universal del usuario, si es posible
+		global_user_id: int | None = None
+		try:
+			if platform_value == "discord" and discord_user_id:
+				lookup = find_user_by_discord_id(str(discord_user_id))
+				if lookup is not None:
+					global_user_id = int(lookup.user_id)
+			elif platform_value in {"discord", "youtube", "global"} and user_ref:
+				lookup = find_user(platform_value, str(user_ref))
+				if lookup is not None:
+					global_user_id = int(lookup.user_id)
+		except Exception:
+			global_user_id = None
+
+		id_prefix = f"`ID:{global_user_id}` " if global_user_id is not None else ""
+
 		if platform_value == "discord":
 			mention_id: int | None = None
 			try:
@@ -203,11 +223,16 @@ async def notify_economy_progress_if_needed(
 					mention_id = None
 
 			if mention_id is not None and mention_id > 0:
-				user_display = f"<@{mention_id}>"
+				user_display = f"{id_prefix}<@{mention_id}>".strip()
 			else:
-				user_display = "@usuario"
+				user_display = f"{id_prefix}@usuario".strip()
 		else:
-			user_display = f"**ID {user_ref} ({platform_value})**"
+			# Para plataformas externas no usamos la ID de plataforma como "ID:";
+			# solo mostramos el prefijo de ID universal si se pudo resolver.
+			if global_user_id is not None:
+				user_display = f"{id_prefix}**({platform_value}:{user_ref})**".strip()
+			else:
+				user_display = f"**({platform_value}:{user_ref})**"
 
 		state = _load_state(guild_id)
 		user_state = _ensure_user_state(state, user_state_key)

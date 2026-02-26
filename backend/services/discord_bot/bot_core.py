@@ -159,6 +159,15 @@ class PowerBotDiscord(commands.Bot):
         if self._voice_earning_task is None or self._voice_earning_task.done():
             self._voice_earning_task = asyncio.create_task(self._voice_earning_loop())
             print("🎙️ Earning por llamada activado")
+        # Notificador de directos YouTube
+        try:
+            from backend.services.discord_bot.live_stream import (
+                start_live_stream_notifier,
+            )
+
+            await start_live_stream_notifier(self)
+        except Exception as exc:
+            print(f"⚠️ No se pudo iniciar el notificador de directos: {exc}")
         print()
 
     async def _external_economy_events_loop(self):

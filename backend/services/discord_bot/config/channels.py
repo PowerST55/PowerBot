@@ -27,6 +27,8 @@ class ChannelsConfig:
             "music_channel": None,
             "commands_channel": None,
             "afk_voice_channel": None,
+            # Canal donde se anuncian directos de YouTube
+            "livestream_channel": None,
         }
         
         self._config = self._load()

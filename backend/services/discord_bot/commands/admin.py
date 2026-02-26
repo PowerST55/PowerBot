@@ -59,6 +59,7 @@ def setup_admin_commands(bot: commands.Bot):
         app_commands.Choice(name="Logs", value="logs"),
         app_commands.Choice(name="Economía", value="economy"),
         app_commands.Choice(name="Mina", value="mine"),
+        app_commands.Choice(name="Livestreams", value="livestreams"),
     ])
     async def set_channel(interaction: discord.Interaction, tipo: app_commands.Choice[str], channel: discord.TextChannel):
         """Configura canales del servidor - Solo administradores"""
@@ -79,6 +80,7 @@ def setup_admin_commands(bot: commands.Bot):
                 "confession": "confession_channel",
                 "logs": "logs_channel",
                 "economy": "economy_channel",
+                "livestreams": "livestream_channel",
             }
             
             # Guardar el canal
@@ -104,6 +106,7 @@ def setup_admin_commands(bot: commands.Bot):
                 "logs": "Logs",
                 "economy": "Economía",
                 "mine": "Mina",
+                "livestreams": "Livestreams",
             }
             
             embed = discord.Embed(
@@ -496,6 +499,7 @@ def setup_admin_commands(bot: commands.Bot):
     @app_commands.choices(tipo=[
         app_commands.Choice(name="DJ", value="dj"),
         app_commands.Choice(name="MOD", value="mod"),
+        app_commands.Choice(name="Notificaciones", value="notifications"),
     ])
     async def set_role(interaction: discord.Interaction, tipo: app_commands.Choice[str], rol: discord.Role):
         """Configura roles del servidor - Solo administradores"""
@@ -518,9 +522,10 @@ def setup_admin_commands(bot: commands.Bot):
             tipo_nombre = {
                 "dj": "DJ",
                 "mod": "MOD",
+                "notifications": "Notificaciones",
             }
             
-            # Manejo diferenciado para DJ (único) y MOD (múltiple)
+            # Manejo diferenciado: DJ (único), MOD (múltiple), notifications (único)
             if tipo.value == "dj":
                 # DJ solo puede tener un rol
                 roles_config.set_role("dj", rol.id)
@@ -535,7 +540,7 @@ def setup_admin_commands(bot: commands.Bot):
                 embed.add_field(name="ID", value=f"`{rol.id}`", inline=True)
                 embed.set_footer(text="Guardado en data/discord_bot/")
                 
-            else:  # MOD
+            elif tipo.value == "mod":  # MOD
                 # MOD puede tener múltiples roles
                 is_new = roles_config.add_mod_role(rol.id)
                 
@@ -564,7 +569,20 @@ def setup_admin_commands(bot: commands.Bot):
                     embed.add_field(name="Roles MOD totales", value=roles_list, inline=False)
                 
                 embed.set_footer(text="Guardado en data/discord_bot/")
-            
+
+            else:  # notifications
+                roles_config.set_role("notifications", rol.id)
+
+                embed = discord.Embed(
+                    title="✅ Rol de notificaciones configurado",
+                    description="Rol usado para notificar eventos globales (ej: streams en vivo)",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="Tipo", value="`Notificaciones`", inline=True)
+                embed.add_field(name="Rol", value=rol.mention, inline=True)
+                embed.add_field(name="ID", value=f"`{rol.id}`", inline=True)
+                embed.set_footer(text="Guardado en data/discord_bot/")
+
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             embed = discord.Embed(

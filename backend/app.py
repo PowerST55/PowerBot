@@ -51,7 +51,12 @@ async def main() -> int:
 		
 		# 3. Verificar autorun de YouTube (flujo completo tipo yapi)
 		try:
-			from backend.console.commands.youtube.general import _load_config, cmd_youtube_yapi, CommandContext
+			from backend.console.commands.youtube.general import (
+				_load_config,
+				cmd_youtube_yapi,
+				CommandContext,
+				start_autostream_if_enabled,
+			)
 			config = _load_config()
 			if config.get("youtube", {}).get("autorun", False):
 				console.print("[info]🎬 YouTube autorun activado - iniciando flujo yapi...[/info]")
@@ -62,6 +67,17 @@ async def main() -> int:
 				except Exception as e:
 					console.print(f"[warning]⚠ Error en yapi autorun: {e}[/warning]")
 					logger.exception("YouTube autorun failed")
+
+			# 3.b Verificar autostream de YouTube (loop automático de stream)
+			try:
+				ok_autostream, msg_autostream = await start_autostream_if_enabled()
+				if ok_autostream:
+					console.print("[success]✓ Autostream de YouTube iniciado automáticamente[/success]")
+				elif "desactivado" not in str(msg_autostream).lower():
+					console.print(f"[warning]⚠ Autostream YouTube: {msg_autostream}[/warning]")
+			except Exception as e:
+				console.print(f"[warning]⚠ Error en autorun Autostream YouTube: {e}[/warning]")
+				logger.exception("YouTube autostream autorun failed")
 		except Exception as e:
 			console.print(f"[warning]⚠ Error cargando config de YouTube: {e}[/warning]")
 			logger.exception("Error loading YouTube config")

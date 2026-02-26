@@ -23,6 +23,8 @@ class RolesConfig:
         self._defaults = {
             "dj": None,
             "mod": [],  # MOD es una lista porque puede haber múltiples
+            # Rol usado para notificaciones (ej: streams en vivo)
+            "notifications": None,
         }
         
         self._config = self._load()
