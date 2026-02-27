@@ -214,13 +214,80 @@ def import_item_from_folder(
         
         # Verificar si ya existe
         existing = conn.execute(
-            "SELECT item_id FROM items WHERE item_key = ?",
+            "SELECT * FROM items WHERE item_key = ?",
             (data["item_key"],)
         ).fetchone()
         
         if existing:
-            print(f"  ⚠️ Item '{data['item_key']}' ya existe (ID: {existing['item_id']})")
-            return get_item_by_id(existing["item_id"])
+            existing_item = dict(existing)
+
+            new_values = {
+                "source": source,
+                "nombre": data["nombre"],
+                "descripcion": data["descripcion"],
+                "rareza": data["rareza"],
+                "imagen_local": imagen_local,
+                "ataque": stats.get("ataque", 0),
+                "defensa": stats.get("defensa", 0),
+                "vida": stats.get("vida", 0),
+                "armadura": stats.get("armadura", 0),
+                "mantenimiento": stats.get("mantenimiento", 0),
+                "metadata": json.dumps(data.get("metadata", {})),
+            }
+
+            changed_fields = [
+                field for field, value in new_values.items()
+                if existing_item.get(field) != value
+            ]
+
+            if changed_fields:
+                conn.execute(
+                    """UPDATE items SET
+                        source = ?,
+                        nombre = ?,
+                        descripcion = ?,
+                        rareza = ?,
+                        imagen_local = ?,
+                        ataque = ?,
+                        defensa = ?,
+                        vida = ?,
+                        armadura = ?,
+                        mantenimiento = ?,
+                        metadata = ?,
+                        updated_at = ?
+                    WHERE item_id = ?""",
+                    (
+                        new_values["source"],
+                        new_values["nombre"],
+                        new_values["descripcion"],
+                        new_values["rareza"],
+                        new_values["imagen_local"],
+                        new_values["ataque"],
+                        new_values["defensa"],
+                        new_values["vida"],
+                        new_values["armadura"],
+                        new_values["mantenimiento"],
+                        new_values["metadata"],
+                        now_iso,
+                        existing_item["item_id"],
+                    )
+                )
+                conn.commit()
+
+                updated_item = get_item_by_id(existing_item["item_id"])
+                if updated_item:
+                    _ITEMS_CACHE[existing_item["item_id"]] = updated_item
+                    _ITEMS_BY_KEY[data["item_key"]] = updated_item
+
+                changed_fields_txt = ", ".join(changed_fields)
+                print(
+                    f"  🔄 Item actualizado: '{data['item_key']}' "
+                    f"(ID: {existing_item['item_id']}) | cambios: {changed_fields_txt}"
+                )
+                return updated_item
+
+            print(f"  ℹ️ Item sin cambios: '{data['item_key']}' (ID: {existing_item['item_id']})")
+            return get_item_by_id(existing_item["item_id"])
         
         # Insertar nuevo
         cursor = conn.execute(
@@ -411,6 +478,159 @@ def import_all_items() -> Dict[str, any]:
     print(f"Items en caché: {total_results['cached_items']}")
     
     return total_results
+
+
+def sync_existing_items() -> Dict[str, any]:
+    """
+    Sincroniza catálogo tomando assets como fuente de verdad, sin crear nuevos.
+
+    - Si el item_key existe en DB: actualiza cambios (incluyendo imagen) usando import_item_from_folder.
+    - Si el item_key NO existe en DB: lo omite (no crea nuevos).
+    - Si un item existe en DB pero YA NO existe en assets: lo elimina de DB.
+
+    Returns:
+        Dict con estadísticas de sincronización.
+    """
+    _ensure_folders()
+
+    results = {
+        "processed": 0,
+        "updated_or_kept": 0,
+        "skipped_new": 0,
+        "failed": 0,
+        "deleted": 0,
+        "prune_skipped": False,
+        "by_source": {
+            "gacha": 0,
+            "store": 0,
+        },
+    }
+
+    asset_item_keys: set[str] = set()
+
+    def _remove_media_file_if_any(image_rel_path: Optional[str]) -> None:
+        if not image_rel_path:
+            return
+        try:
+            image_path = PROJECT_ROOT / image_rel_path
+            if image_path.exists() and image_path.is_file():
+                image_path.unlink()
+        except Exception:
+            pass
+
+    def _db_has_item(item_key: str) -> bool:
+        conn = get_connection()
+        try:
+            _ensure_items_table(conn)
+            row = conn.execute(
+                "SELECT item_id FROM items WHERE item_key = ?",
+                (item_key,)
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    def _sync_folder(item_folder: Path, source: Literal["gacha", "store"]) -> None:
+        results["processed"] += 1
+        json_path = item_folder / "item.json"
+
+        if not json_path.exists():
+            print(f"  ⚠️ Omitido (sin item.json): {source}/{item_folder.name}")
+            results["failed"] += 1
+            return
+
+        data = _load_item_json(json_path)
+        if not data:
+            print(f"  ❌ Omitido (JSON inválido): {source}/{item_folder.name}")
+            results["failed"] += 1
+            return
+
+        item_key = data.get("item_key")
+        if not item_key:
+            print(f"  ❌ Omitido (sin item_key): {source}/{item_folder.name}")
+            results["failed"] += 1
+            return
+
+        asset_item_keys.add(item_key)
+
+        if not _db_has_item(item_key):
+            print(f"  ⏭️ Omitido (nuevo no creado): {item_key}")
+            results["skipped_new"] += 1
+            return
+
+        item = import_item_from_folder(item_folder, source)
+        if item:
+            results["updated_or_kept"] += 1
+            results["by_source"][source] += 1
+        else:
+            results["failed"] += 1
+
+    print("\n" + "=" * 60)
+    print("🔄 SINCRONIZACIÓN DE ITEMS EXISTENTES")
+    print("=" * 60)
+
+    for rarity in RARITY_LEVELS:
+        rarity_folder = ASSETS_GACHA / rarity
+        if rarity_folder.exists():
+            for item_folder in rarity_folder.iterdir():
+                if item_folder.is_dir():
+                    _sync_folder(item_folder, "gacha")
+
+    if ASSETS_STORE.exists():
+        for item_folder in ASSETS_STORE.iterdir():
+            if item_folder.is_dir():
+                _sync_folder(item_folder, "store")
+
+    if results["failed"] == 0:
+        conn = get_connection()
+        try:
+            _ensure_items_table(conn)
+            db_rows = conn.execute("SELECT item_id, item_key, imagen_local FROM items").fetchall()
+            keys_to_delete = [dict(row) for row in db_rows if row["item_key"] not in asset_item_keys]
+
+            if keys_to_delete:
+                item_ids_to_delete = [row["item_id"] for row in keys_to_delete]
+                for row in keys_to_delete:
+                    _remove_media_file_if_any(row.get("imagen_local"))
+
+                try:
+                    placeholders = ",".join(["?" for _ in item_ids_to_delete])
+                    conn.execute(
+                        f"DELETE FROM user_inventory WHERE item_id IN ({placeholders})",
+                        tuple(item_ids_to_delete),
+                    )
+                except Exception:
+                    pass
+
+                conn.execute(
+                    f"DELETE FROM items WHERE item_id IN ({','.join(['?' for _ in item_ids_to_delete])})",
+                    tuple(item_ids_to_delete),
+                )
+                conn.commit()
+                results["deleted"] = len(item_ids_to_delete)
+                print(f"  🗑️ Eliminados de DB por no existir en assets: {results['deleted']}")
+        finally:
+            conn.close()
+    else:
+        results["prune_skipped"] = True
+        print("  ⚠️ Prune omitido por errores de validación; no se eliminó nada de DB")
+
+    cached = _refresh_cache()
+    results["cached_items"] = cached
+
+    print("\n" + "=" * 60)
+    print("✅ RESUMEN SINCRONIZACIÓN")
+    print("=" * 60)
+    print(f"Procesados: {results['processed']}")
+    print(f"Actualizados/sin cambios: {results['updated_or_kept']}")
+    print(f"Omitidos (nuevos): {results['skipped_new']}")
+    print(f"Eliminados (no existen en assets): {results['deleted']}")
+    print(f"Fallidos: {results['failed']}")
+    if results["prune_skipped"]:
+        print("Prune: omitido por errores")
+    print(f"En caché: {results['cached_items']}")
+
+    return results
 
 
 # ============================================================

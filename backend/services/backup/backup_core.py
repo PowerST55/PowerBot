@@ -43,17 +43,39 @@ def test_mysql_connection() -> Tuple[bool, str]:
 				pass
 
 
-def run_backup_service(poll_seconds: int = 60) -> None:
-	"""Ejecuta el servicio backup con healthcheck periódico de MySQL."""
+
+def run_backup_service(poll_seconds: int = 60, healthcheck_seconds: int | None = None, verbose_ok: bool = False) -> None:
+	"""Ejecuta el servicio backup.
+
+	- Llama a ``run_due_autosave_if_needed`` en cada iteración (él decide si toca guardar).
+	- Hace healthcheck MySQL solo cada ``healthcheck_seconds`` para no spamear.
+	- Solo loguea OK continuos si ``verbose_ok`` es True o cambia el estado.
+	"""
+	if healthcheck_seconds is None:
+		try:
+			healthcheck_seconds = int(os.getenv("BACKUP_HEALTHCHECK_SECONDS", "300"))
+		except Exception:
+			healthcheck_seconds = 300
+
+	healthcheck_seconds = max(30, healthcheck_seconds)
+
 	print("💾 BACKUP: Servicio iniciado")
-	print(f"💾 BACKUP: Healthcheck MySQL cada {poll_seconds}s")
+	print(f"💾 BACKUP: Loop cada {poll_seconds}s | Healthcheck MySQL cada {healthcheck_seconds}s")
+
+	last_healthcheck_time: float = 0.0
+	last_healthcheck_ok: bool | None = None
 
 	while True:
-		ok, message = test_mysql_connection()
-		if ok:
-			print(f"✅ BACKUP: {message}")
-		else:
-			print(f"⚠ BACKUP: {message}")
+		now = time.time()
+		if now - last_healthcheck_time >= healthcheck_seconds:
+			ok, message = test_mysql_connection()
+			if ok:
+				if verbose_ok or last_healthcheck_ok is not True:
+					print(f"✅ BACKUP: {message}")
+			else:
+				print(f"⚠ BACKUP: {message}")
+			last_healthcheck_ok = ok
+			last_healthcheck_time = now
 
 		autosave_ok, autosave_message = run_due_autosave_if_needed()
 		if autosave_ok:
@@ -61,6 +83,7 @@ def run_backup_service(poll_seconds: int = 60) -> None:
 		else:
 			if "desactivado" not in autosave_message.lower() and "aún no vence" not in autosave_message.lower():
 				print(f"⚠ BACKUP: Autosave: {autosave_message}")
+
 		time.sleep(poll_seconds)
 
 
@@ -70,8 +93,9 @@ if __name__ == "__main__":
 	except Exception:
 		poll = 60
 
+	verbose_ok = os.getenv("BACKUP_HEALTHCHECK_VERBOSE", "0").lower() in {"1", "true", "yes", "on"}
 	try:
-		run_backup_service(poll_seconds=max(10, poll))
+		run_backup_service(poll_seconds=max(10, poll), verbose_ok=verbose_ok)
 	except KeyboardInterrupt:
 		print("🛑 BACKUP: Servicio detenido por usuario")
 

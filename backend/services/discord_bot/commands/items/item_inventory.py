@@ -11,6 +11,7 @@ from typing import Optional, List
 from pathlib import Path
 
 from backend.managers import inventory_manager, user_manager, items_manager
+from backend.services.discord_bot.config.economy import get_economy_config
 
 
 def setup_inventory_commands(bot: commands.Bot):
@@ -111,20 +112,24 @@ def setup_inventory_commands(bot: commands.Bot):
             # Ordenar por mejores stats primero
             inventory = _sort_inventory_by_stats(inventory)
 
-            # Obtener conteo por rareza
-            rarity_counts = _count_rarities(inventory)
-            
             # Obtener información del usuario
             user = user_manager.get_user_by_id(target_user_id)
             user_display_name = user.username if user else f"Usuario {target_user_id}"
+
+            currency_symbol = ""
+            try:
+                if interaction.guild is not None:
+                    currency_symbol = get_economy_config(interaction.guild.id).get_currency_symbol()
+            except Exception:
+                currency_symbol = ""
             
             # Crear embeds (con paginación si es necesario)
             pages = _create_inventory_embeds(
                 inventory=inventory,
-                rarity_counts=rarity_counts,
                 user_id=target_user_id,
                 user_display_name=user_display_name,
-                discord_profile=target_discord_profile
+                discord_profile=target_discord_profile,
+                currency_symbol=currency_symbol,
             )
             
             if len(pages) == 1:
@@ -148,26 +153,25 @@ def setup_inventory_commands(bot: commands.Bot):
 
 def _create_inventory_embeds(
     inventory: List[dict],
-    rarity_counts: dict,
     user_id: int,
     user_display_name: str,
-    discord_profile = None
+    discord_profile = None,
+    currency_symbol: str = "",
 ) -> List[dict]:
     """
     Crea embeds para mostrar el inventario con paginación por item.
     
     Args:
         inventory: Lista de items del inventario
-        rarity_counts: Conteo por rareza
         user_id: ID del usuario
         user_display_name: Nombre del usuario
         discord_profile: Perfil Discord del usuario (opcional)
+        currency_symbol: Símbolo de moneda configurado para mantenimiento
     Returns:
         List[dict]: Lista de paginas con embed y metadata de imagen
     """
     pages = []
     total_pages = len(inventory)
-    rarity_summary = _format_rarity_summary(rarity_counts)
 
     for page, item in enumerate(inventory):
         rarity_emoji = {
@@ -178,18 +182,25 @@ def _create_inventory_embeds(
             "legendary": "🟡"
         }.get(item.get("rareza", "common"), "⚪")
 
+        rarity_text = {
+            "common": "comun",
+            "uncommon": "poco comun",
+            "rare": "raro",
+            "epic": "epico",
+            "legendary": "legendario",
+        }.get(item.get("rareza", "common"), str(item.get("rareza", "common")))
+
         title = f"{rarity_emoji} {item['nombre']} ({page + 1}/{total_pages})"
 
         embed = discord.Embed(
             title=title,
             description=(
-                f"**Inventario de:** {user_display_name}\n"
-                f"**ID Universal:** `{user_id}`\n"
+                f"**Inventario de:** {_format_inventory_owner(user_display_name, user_id, discord_profile)}\n"
                 f"**ID Item:** `{item['item_id']}`\n"
                 f"**Cantidad:** x{item['quantity']}\n"
-                f"**Rarezas:** {rarity_summary}"
+                f"**Rareza:** {rarity_text}"
             ),
-            color=discord.Color.blue()
+            color=_get_rarity_color_for_item(item.get("rareza", "common"))
         )
 
         image_info = _resolve_item_image(item)
@@ -197,7 +208,7 @@ def _create_inventory_embeds(
             embed.set_image(url=image_info["embed_url"])
 
         # Stats del item
-        stats_text = _format_item_stats(item)
+        stats_text = _format_item_stats(item, currency_symbol=currency_symbol)
         embed.add_field(
             name="⚙️ Stats",
             value=stats_text,
@@ -349,47 +360,50 @@ def _resolve_local_image_path(image_url: str) -> Optional[Path]:
     return None
 
 
-def _count_rarities(inventory: List[dict]) -> dict:
-    counts = {
-        "common": 0,
-        "uncommon": 0,
-        "rare": 0,
-        "epic": 0,
-        "legendary": 0
-    }
-
-    for item in inventory:
-        rarity = item.get("rareza", "common")
-        if rarity in counts:
-            counts[rarity] += item.get("quantity", 0)
-
-    return counts
-
-
-def _format_rarity_summary(rarity_counts: dict) -> str:
-    return (
-        f"⚪ {rarity_counts.get('common', 0)} "
-        f"🟢 {rarity_counts.get('uncommon', 0)} "
-        f"🔵 {rarity_counts.get('rare', 0)} "
-        f"🟣 {rarity_counts.get('epic', 0)} "
-        f"🟡 {rarity_counts.get('legendary', 0)}"
-    )
-
-
-def _format_item_stats(item: dict) -> str:
+def _format_item_stats(item: dict, currency_symbol: str = "") -> str:
     stats_parts = []
     if item.get("ataque", 0) > 0:
-        stats_parts.append(f"⚔️ {item['ataque']}")
+        stats_parts.append(f"⚔️ **Ataque:** {item['ataque']}")
     if item.get("defensa", 0) > 0:
-        stats_parts.append(f"🛡️ {item['defensa']}")
+        stats_parts.append(f"🛡️ **Defensa:** {item['defensa']}")
     if item.get("vida", 0) > 0:
-        stats_parts.append(f"❤️ {item['vida']}")
+        stats_parts.append(f"❤️ **Vida:** {item['vida']}")
     if item.get("armadura", 0) > 0:
-        stats_parts.append(f"🔗 {item['armadura']}")
+        stats_parts.append(f"🔗 **Armadura:** {item['armadura']}")
     if item.get("mantenimiento", 0) > 0:
-        stats_parts.append(f"🔧 {item['mantenimiento']}")
+        symbol_suffix = f" {currency_symbol}" if currency_symbol else ""
+        stats_parts.append(f"🔧 **Mantenimiento:** {item['mantenimiento']}{symbol_suffix}")
 
-    return " ".join(stats_parts) if stats_parts else "Sin stats"
+    return "\n".join(stats_parts) if stats_parts else "Sin stats"
+
+
+def _format_inventory_owner(user_display_name: str, user_id: int, discord_profile = None) -> str:
+    """Construye la línea de propietario: `ID:X` @usuario (si existe mención)."""
+    if discord_profile is not None:
+        discord_id = getattr(discord_profile, "discord_id", None)
+        if discord_id:
+            return f"`ID:{user_id}` <@{discord_id}>"
+    return f"`ID:{user_id}` {user_display_name}"
+
+
+def _get_rarity_color_for_item(rareza: str) -> discord.Color:
+    """
+    Aplica la misma escala visual usada en mina.py, mapeada a rareza.
+
+    common -> dark_grey
+    uncommon -> purple
+    rare -> blue
+    epic -> gold
+    legendary -> green
+    """
+    color_map = {
+        "common": discord.Color.dark_grey(),
+        "uncommon": discord.Color.purple(),
+        "rare": discord.Color.blue(),
+        "epic": discord.Color.gold(),
+        "legendary": discord.Color.green(),
+    }
+    return color_map.get(str(rareza).lower(), discord.Color.dark_grey())
 
 
 def _sort_inventory_by_stats(inventory: List[dict]) -> List[dict]:

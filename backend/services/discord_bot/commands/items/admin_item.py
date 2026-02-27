@@ -3,6 +3,7 @@ Admin Item Commands para PowerBot.
 Comandos solo para moderadores:
 - /item_give <@user o ID> <item_id> <cantidad>: Dar items a un usuario
 - /remove_item <@user o ID> <item_id> <cantidad>: Remover items de un usuario
+- /sync_items: Sincroniza items existentes desde assets (sin crear nuevos)
 """
 import discord
 from discord import app_commands
@@ -92,6 +93,70 @@ async def _get_item_image_file(item_id: int) -> Optional[discord.File]:
 
 def setup_admin_item_commands(bot: commands.Bot) -> None:
     """Registra los comandos de admin de items"""
+
+    @bot.tree.command(name="sync_items", description="Sincroniza items con assets como fuente de verdad (MODERADOR)")
+    async def sync_items(interaction: discord.Interaction):
+        """Sincroniza items existentes por item_key sin crear nuevos"""
+
+        if not _is_moderator(interaction):
+            embed = discord.Embed(
+                title="❌ Permiso Denegado",
+                description="Solo moderadores pueden usar este comando.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        try:
+            result = items_manager.sync_existing_items()
+
+            embed = discord.Embed(
+                title="✅ Sincronización de Items completada",
+                description="Se sincronizaron items sin crear nuevos y se eliminaron de DB los que ya no están en assets.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="📊 Resumen",
+                value=(
+                    f"Procesados: `{result['processed']}`\n"
+                    f"Actualizados/sin cambios: `{result['updated_or_kept']}`\n"
+                    f"Omitidos (nuevos): `{result['skipped_new']}`\n"
+                    f"Eliminados (no están en assets): `{result.get('deleted', 0)}`\n"
+                    f"Fallidos: `{result['failed']}`\n"
+                    f"En caché: `{result.get('cached_items', 0)}`"
+                ),
+                inline=False
+            )
+            embed.add_field(
+                name="🧩 Por origen",
+                value=(
+                    f"Gacha: `{result['by_source']['gacha']}`\n"
+                    f"Store: `{result['by_source']['store']}`"
+                ),
+                inline=True
+            )
+            embed.add_field(
+                name="👮 Ejecutado por",
+                value=interaction.user.mention,
+                inline=True
+            )
+            if result.get("prune_skipped"):
+                embed.add_field(
+                    name="⚠️ Aviso",
+                    value="Se detectaron errores de validación; no se eliminaron items de DB en esta ejecución.",
+                    inline=False
+                )
+            embed.set_footer(text="PowerBot Item System")
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Error sincronizando items",
+                description=f"Error: {e}",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
     
     @bot.tree.command(name="item_give", description="Da items a un usuario (MODERADOR)")
     @app_commands.describe(

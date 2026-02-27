@@ -49,6 +49,7 @@ $RECYCLE.BIN/
 
 # Datos sensibles
 data/
+assets/
 backend/data/
 keys/
 backend/keys/

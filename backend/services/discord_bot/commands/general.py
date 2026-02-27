@@ -10,10 +10,33 @@ from typing import Optional
 from backend.managers.user_lookup_manager import find_user_by_discord_id, find_user_by_global_id
 from backend.managers.economy_manager import get_user_balance_by_id
 from backend.managers import inventory_manager
+from backend.services.discord_bot.commands.economy.user_economy import send_donation_embed
 
 
 def setup_general_commands(bot: commands.Bot) -> None:
 	"""Registra comandos generales"""
+
+	crear_group = app_commands.Group(
+		name="crear",
+		description="Crear acciones públicas (ej. donación)"
+	)
+
+	@crear_group.command(
+		name="donacion",
+		description="Crea un panel para que otros te donen puntos"
+	)
+	@app_commands.describe(
+		amount="Monto fijo que se donará al pulsar el botón"
+	)
+	async def crear_donacion(
+		interaction: discord.Interaction,
+		amount: float,
+	):
+		await interaction.response.defer()
+		result_embed = await send_donation_embed(interaction, amount)
+		await interaction.followup.send(embed=result_embed, ephemeral=True)
+
+	bot.tree.add_command(crear_group)
 
 	@bot.tree.command(
 		name="id",
