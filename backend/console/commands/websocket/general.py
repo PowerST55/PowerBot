@@ -70,7 +70,7 @@ def _get_autorun_manager():
 
 
 def _get_access_urls() -> tuple[str, int, str]:
-	host = os.getenv("WSOCKET_HOST", "127.0.0.1")
+	host = os.getenv("WSOCKET_HOST", "0.0.0.0")
 	port = int(os.getenv("WSOCKET_PORT", "8765"))
 	browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
 	ws_url = f"ws://{browser_host}:{port}/ws"
@@ -92,7 +92,7 @@ async def start_websocket_server() -> tuple[bool, str]:
 	env = os.environ.copy()
 	env.setdefault("PYTHONUTF8", "1")
 	env.setdefault("PYTHONIOENCODING", "utf-8")
-	env.setdefault("WSOCKET_HOST", "127.0.0.1")
+	env.setdefault("WSOCKET_HOST", "0.0.0.0")
 	env.setdefault("WSOCKET_PORT", "8765")
 
 	pythonpath = env.get("PYTHONPATH", "")
