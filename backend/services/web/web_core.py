@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import importlib
+import logging
 import os
 from pathlib import Path
 from typing import Iterable
@@ -18,7 +21,9 @@ from backend.services.web.livefeed import (
 from backend.services.web.economy.top_packager import get_top10_payload
 
 app = FastAPI(title="PowerBot Web", version="1.0.0")
+logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+EVENTS_WS_INTERNAL_URL = os.getenv("EVENTS_WS_INTERNAL_URL", "ws://127.0.0.1:8765/ws")
 
 
 def _resolve_index_path() -> Path | None:
@@ -212,11 +217,51 @@ async def health() -> dict:
 async def websocket_endpoint(ws: WebSocket) -> None:
 	await ws.accept()
 	try:
-		while True:
-			message = await ws.receive_text()
-			await ws.send_text(f"echo: {message}")
+		websockets = importlib.import_module("websockets")
+	except ModuleNotFoundError:
+		logger.error("Dependencia 'websockets' requerida para el proxy /ws")
+		await ws.close(code=1011, reason="websockets module missing on server")
+		return
+
+	upstream_url = os.getenv("EVENTS_WS_INTERNAL_URL", EVENTS_WS_INTERNAL_URL)
+	try:
+		async with websockets.connect(upstream_url) as upstream:
+			async def client_to_upstream() -> None:
+				try:
+					while True:
+						data = await ws.receive()
+						msg_type = data.get("type")
+						if msg_type == "websocket.disconnect":
+							await upstream.close()
+							break
+						text_data = data.get("text")
+						if text_data is not None:
+							await upstream.send(text_data)
+							continue
+						bytes_data = data.get("bytes")
+						if bytes_data is not None:
+							await upstream.send(bytes_data)
+				except WebSocketDisconnect:
+					await upstream.close()
+
+			async def upstream_to_client() -> None:
+				try:
+					async for message in upstream:
+						if isinstance(message, bytes):
+							await ws.send_bytes(message)
+						else:
+							await ws.send_text(message)
+				except websockets.ConnectionClosedOK:
+					pass
+				except websockets.ConnectionClosedError:
+					pass
+
+			await asyncio.gather(client_to_upstream(), upstream_to_client())
 	except WebSocketDisconnect:
 		return
+	except Exception as exc:
+		logger.exception("Error en proxy WebSocket /ws hacia %s", upstream_url)
+		await ws.close(code=1011, reason="WebSocket proxy error")
 
 
 def run() -> None:

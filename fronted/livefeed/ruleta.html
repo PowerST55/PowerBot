@@ -357,7 +357,8 @@ function buildWebSocketUrl() {
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const host = params.get("wshost") || window.location.hostname || "127.0.0.1";
-    const port = params.get("wsport") || "8765";
+    const inferredPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+    const port = params.get("wsport") || inferredPort || "19131";
     const path = params.get("wspath") || "/ws";
     return `${protocol}://${host}:${port}${path}`;
 }

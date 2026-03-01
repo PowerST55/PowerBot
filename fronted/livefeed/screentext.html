@@ -113,10 +113,11 @@
 
         function connect() {
             const params = new URLSearchParams(window.location.search);
-            const directUrl = params.get("ws");
-            const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-            const host = params.get("wshost") || window.location.hostname || "127.0.0.1";
-            const port = params.get("wsport") || "8765";
+                const directUrl = params.get("ws");
+                const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+                const host = params.get("wshost") || window.location.hostname || "127.0.0.1";
+                const inferredPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+                const port = params.get("wsport") || inferredPort || "19131";
             const path = params.get("wspath") || "/ws";
             const wsUrl = directUrl || `${protocol}://${host}:${port}${path}`;
 
