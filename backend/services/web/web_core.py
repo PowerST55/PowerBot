@@ -188,7 +188,14 @@ async def livefeed_file(file_path: str) -> Response:
 	if not target.exists() or not target.is_file():
 		return JSONResponse({"ok": False, "error": "Archivo livefeed no encontrado"}, status_code=404)
 
-	return FileResponse(target)
+	return FileResponse(
+		target,
+		headers={
+			"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+			"Pragma": "no-cache",
+			"Expires": "0",
+		},
+	)
 
 
 @app.get("/api/economy/top10")
