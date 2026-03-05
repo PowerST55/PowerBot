@@ -135,7 +135,20 @@ async def main() -> int:
 			console.print(f"[warning]⚠ Error en autorun Backup: {e}[/warning]")
 			logger.exception("Backup autorun failed")
 
-		# 8. Importar e iniciar la consola interactiva
+		# 8. Verificar autorun de Store
+		try:
+			from backend.console.commands.store.general import start_if_autorun as start_store_if_autorun
+			store_ok, store_message = await start_store_if_autorun()
+			if store_ok:
+				console.print("[success]✓ Servicio store activado automáticamente[/success]")
+			else:
+				if "desactivado" not in str(store_message).lower():
+					console.print(f"[warning]⚠ Store autorun: {store_message}[/warning]")
+		except Exception as e:
+			console.print(f"[warning]⚠ Error en autorun Store: {e}[/warning]")
+			logger.exception("Store autorun failed")
+
+		# 9. Importar e iniciar la consola interactiva
 		from backend.console.console import start_console
 		
 		console.print("[header]PowerBot iniciado[/header]")

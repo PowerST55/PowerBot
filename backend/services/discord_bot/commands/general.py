@@ -32,7 +32,7 @@ def setup_general_commands(bot: commands.Bot) -> None:
 		interaction: discord.Interaction,
 		amount: float,
 	):
-		await interaction.response.defer()
+		await interaction.response.defer(ephemeral=True)
 		result_embed = await send_donation_embed(interaction, amount)
 		await interaction.followup.send(embed=result_embed, ephemeral=True)
 

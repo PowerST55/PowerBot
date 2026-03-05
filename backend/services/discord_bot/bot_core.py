@@ -112,6 +112,10 @@ class PowerBotDiscord(commands.Bot):
         from backend.services.discord_bot.commands.items.admin_item import setup_admin_item_commands
         setup_admin_item_commands(self)
 
+        # Registrar comandos admin de tienda
+        from backend.services.discord_bot.commands.items.store_admin import setup_store_admin_commands
+        setup_store_admin_commands(self)
+
         # Registrar comandos de juegos
         from backend.services.discord_bot.commands.games.gamble import setup_gamble_commands
         setup_gamble_commands(self)
@@ -148,6 +152,18 @@ class PowerBotDiscord(commands.Bot):
             await MineView.register_persistent(self)
         except Exception as exc:
             print(f"⚠️ No se pudo registrar la vista persistente de mina: {exc}")
+        try:
+            from backend.services.discord_bot.store.store_packager import DiscordStorePackager
+            await DiscordStorePackager.register_persistent_buy_buttons(self)
+        except Exception as exc:
+            print(f"⚠️ No se pudieron registrar los botones persistentes de tienda: {exc}")
+        try:
+            from backend.services.discord_bot.commands.economy.user_economy import (
+                register_persistent_donation_buttons,
+            )
+            await register_persistent_donation_buttons(self)
+        except Exception as exc:
+            print(f"⚠️ No se pudieron registrar los botones persistentes de donación: {exc}")
         await self._cleanup_deleted_earning_channels_all_guilds()
         await self._backfill_existing_discord_progress()
         if self._external_economy_events_task is None or self._external_economy_events_task.done():

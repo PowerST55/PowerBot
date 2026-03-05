@@ -29,6 +29,8 @@ class ChannelsConfig:
             "afk_voice_channel": None,
             # Canal donde se anuncian directos de YouTube
             "livestream_channel": None,
+            # Canal foro donde vive la tienda de items
+            "store_forum_channel": None,
         }
         
         self._config = self._load()

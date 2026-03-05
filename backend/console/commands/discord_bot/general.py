@@ -22,6 +22,42 @@ _discord_autorun_manager = None
 _discord_log_threads: list[threading.Thread] = []
 
 
+def _extract_discord_start_error(error_output: str, code: int) -> str:
+	"""Selecciona una línea de error útil para startup (evita ruido de aiohttp connector)."""
+	if not error_output:
+		return f"No se pudo iniciar Discord (exit code: {code})"
+
+	lines = [line.strip() for line in error_output.splitlines() if line.strip()]
+	if not lines:
+		return f"No se pudo iniciar Discord (exit code: {code})"
+
+	# Priorizar señales de causa raíz comunes.
+	priority_tokens = [
+		"LoginFailure",
+		"Improper token",
+		"DISCORD_TOKEN",
+		"PrivilegedIntentsRequired",
+		"Forbidden",
+		"Traceback",
+		"ValueError",
+		"RuntimeError",
+		"Exception",
+		"Error",
+	]
+	for token in priority_tokens:
+		for line in lines:
+			if token.lower() in line.lower():
+				return f"No se pudo iniciar Discord (exit code: {code}): {line}"
+
+	# Evitar quedarse con "Unclosed connector" de aiohttp.
+	for line in reversed(lines):
+		if "connector:" in line.lower() or "unclosed" in line.lower():
+			continue
+		return f"No se pudo iniciar Discord (exit code: {code}): {line}"
+
+	return f"No se pudo iniciar Discord (exit code: {code}): {lines[-1]}"
+
+
 def _can_run_discord_module(python_executable: str) -> bool:
 	"""Valida si el intérprete tiene dependencias mínimas para Discord."""
 	try:
@@ -152,10 +188,7 @@ async def _start_discord_process() -> tuple[bool, str]:
 				except Exception:
 					error_output = ""
 			_discord_process = None
-			if error_output:
-				error_line = error_output.splitlines()[-1]
-				return False, f"No se pudo iniciar Discord (exit code: {code}): {error_line}"
-			return False, f"No se pudo iniciar Discord (exit code: {code})"
+			return False, _extract_discord_start_error(error_output, code)
 
 		_discord_log_threads.clear()
 		stdout_thread = threading.Thread(

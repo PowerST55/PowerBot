@@ -131,6 +131,19 @@ class AvatarManager:
             return avatar_url_remote
             
         except requests.RequestException as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            is_404 = status_code == 404 or "404" in str(e)
+
+            # Discord rota hashes viejos con frecuencia; si el URL viejo da 404,
+            # no ensuciamos logs y usamos cache local (si existe) sin bloquear flujo.
+            if platform == "discord" and is_404:
+                cached_local = AvatarManager.get_avatar_local_path(user_id, platform)
+                if cached_local:
+                    logger.debug(f"Avatar 404 para {user_id} (discord). Se usa cache local.")
+                else:
+                    logger.debug(f"Avatar 404 para {user_id} (discord). Sin cache local.")
+                return avatar_url_remote
+
             logger.error(f"❌ Error downloading avatar for {user_id} ({platform}): {e}")
             return None
         except Exception as e:

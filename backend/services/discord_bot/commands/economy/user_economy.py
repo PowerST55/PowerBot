@@ -2,24 +2,188 @@
 Comandos de economía para usuarios normales.
 Sistema de consulta de puntos y transacciones.
 """
+import json
+import time
+import uuid
+from pathlib import Path
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 
 from backend.managers.user_lookup_manager import find_user_by_discord_id, find_user_by_global_id
 from backend.managers.economy_manager import get_user_balance_by_id, transfer_points
 from backend.managers import get_or_create_discord_user
+from backend.managers.avatar_manager import AvatarManager
 from backend.services.discord_bot.config.economy import get_economy_config
+
+
+def _project_root() -> Path:
+	return Path(__file__).resolve().parents[5]
+
+
+def _donation_data_dir() -> Path:
+	path = _project_root() / "backend" / "data" / "discord_bot"
+	path.mkdir(parents=True, exist_ok=True)
+	return path
+
+
+def _donation_index_file(guild_id: int) -> Path:
+	return _donation_data_dir() / f"guild_{guild_id}_donation_buttons.json"
+
+
+def _fmt_amount(value: float) -> str:
+	return f"{float(value):,.2f}"
+
+
+async def _resolve_avatar_url_for_target(
+	*,
+	target_lookup: Any,
+	target_discord_user: Optional[discord.User] = None,
+) -> Optional[discord.File]:
+	"""Obtiene avatar local cacheado y lo devuelve como attachment para embed."""
+	avatar_rel_path: Optional[str] = None
+
+	try:
+		if target_discord_user is not None:
+			avatar_rel_path = AvatarManager.get_avatar_local_path(
+				str(target_discord_user.id),
+				"discord",
+			)
+		elif target_lookup and target_lookup.discord_profile:
+			avatar_rel_path = AvatarManager.get_avatar_local_path(
+				str(target_lookup.discord_profile.discord_id),
+				"discord",
+			)
+		elif target_lookup and target_lookup.youtube_profile:
+			avatar_rel_path = AvatarManager.get_avatar_local_path(
+				str(target_lookup.youtube_profile.youtube_channel_id or target_lookup.user_id),
+				"youtube",
+			)
+
+		if not avatar_rel_path:
+			return None
+
+		avatar_abs = _project_root() / avatar_rel_path
+		if not avatar_abs.exists() or not avatar_abs.is_file():
+			return None
+
+		return discord.File(avatar_abs, filename=avatar_abs.name)
+	except Exception:
+		return None
+
+
+class DonationButtonRegistry:
+	"""Persistencia de paneles de donación por servidor."""
+
+	@staticmethod
+	def _load(guild_id: int) -> dict[str, Any]:
+		path = _donation_index_file(guild_id)
+		if not path.exists():
+			return {"buttons": []}
+		try:
+			with open(path, "r", encoding="utf-8") as file:
+				data = json.load(file)
+				if isinstance(data, dict) and isinstance(data.get("buttons"), list):
+					return data
+		except Exception:
+			pass
+		return {"buttons": []}
+
+	@staticmethod
+	def _save(guild_id: int, payload: dict[str, Any]) -> None:
+		path = _donation_index_file(guild_id)
+		with open(path, "w", encoding="utf-8") as file:
+			json.dump(payload, file, indent=2, ensure_ascii=False)
+
+	@staticmethod
+	async def _disable_panel(bot: commands.Bot, guild_id: int, entry: dict[str, Any]) -> None:
+		channel_id = entry.get("channel_id")
+		message_id = entry.get("message_id")
+		if not channel_id or not message_id:
+			return
+
+		guild = bot.get_guild(int(guild_id))
+		channel = None
+		if guild is not None:
+			channel = guild.get_channel(int(channel_id))
+		if channel is None:
+			channel = bot.get_channel(int(channel_id))
+		if channel is None:
+			try:
+				channel = await bot.fetch_channel(int(channel_id))
+			except Exception:
+				return
+
+		try:
+			message = await channel.fetch_message(int(message_id))
+			await message.edit(view=None)
+		except Exception:
+			return
+
+	@staticmethod
+	async def register(
+		bot: commands.Bot,
+		guild_id: int,
+		entry: dict[str, Any],
+		max_active_per_owner: int = 2,
+	) -> int:
+		"""Registra panel nuevo y elimina el más antiguo si supera el límite por owner."""
+		data = DonationButtonRegistry._load(guild_id)
+		buttons: list[dict[str, Any]] = [
+			button for button in data.get("buttons", []) if isinstance(button, dict)
+		]
+
+		buttons.append(entry)
+		owner_user_id = int(entry.get("owner_user_id"))
+		owner_buttons = sorted(
+			[
+				button
+				for button in buttons
+				if int(button.get("owner_user_id", -1)) == owner_user_id
+			],
+			key=lambda button: float(button.get("created_ts", 0)),
+		)
+
+		removed = 0
+		while len(owner_buttons) > max_active_per_owner:
+			oldest = owner_buttons.pop(0)
+			oldest_donation_id = str(oldest.get("donation_id"))
+			buttons = [
+				button
+				for button in buttons
+				if str(button.get("donation_id")) != oldest_donation_id
+			]
+			removed += 1
+			await DonationButtonRegistry._disable_panel(bot, guild_id, oldest)
+
+		data["buttons"] = buttons
+		DonationButtonRegistry._save(guild_id, data)
+		return removed
+
+	@staticmethod
+	def list_entries(guild_id: int) -> list[dict[str, Any]]:
+		data = DonationButtonRegistry._load(guild_id)
+		return [button for button in data.get("buttons", []) if isinstance(button, dict)]
 
 
 class DonationConfirmView(discord.ui.View):
 	"""Confirmación efímera previa a donar."""
 
-	def __init__(self, target_discord_user: discord.User, amount: float, currency_symbol: str):
+	def __init__(
+		self,
+		*,
+		target_user_id: int,
+		target_label: str,
+		amount: float,
+		currency_symbol: str,
+		target_discord_id: Optional[int] = None,
+	):
 		super().__init__(timeout=60)
-		self.target_discord_user = target_discord_user
+		self.target_user_id = int(target_user_id)
+		self.target_label = target_label
+		self.target_discord_id = int(target_discord_id) if target_discord_id is not None else None
 		self.amount = round(float(amount), 2)
 		self.currency_symbol = currency_symbol
 
@@ -27,10 +191,6 @@ class DonationConfirmView(discord.ui.View):
 	async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 		if interaction.guild is None:
 			await interaction.response.send_message("Este botón solo funciona en servidor.", ephemeral=True)
-			return
-
-		if interaction.user.id == self.target_discord_user.id:
-			await interaction.response.send_message("No puedes donarte a ti mismo.", ephemeral=True)
 			return
 
 		sender_lookup = find_user_by_discord_id(str(interaction.user.id))
@@ -49,20 +209,36 @@ class DonationConfirmView(discord.ui.View):
 			await interaction.response.send_message("❌ No se pudo crear tu cuenta para donar.", ephemeral=True)
 			return
 
-		recipient_lookup = find_user_by_discord_id(str(self.target_discord_user.id))
-		if not recipient_lookup:
-			try:
-				get_or_create_discord_user(
-					discord_id=str(self.target_discord_user.id),
-					discord_username=self.target_discord_user.name,
-					avatar_url=str(self.target_discord_user.display_avatar.url)
-				)
-			except Exception:
-				pass
-			recipient_lookup = find_user_by_discord_id(str(self.target_discord_user.id))
+		recipient_lookup = None
+		if self.target_discord_id is not None:
+			recipient_lookup = find_user_by_discord_id(str(self.target_discord_id))
+			if recipient_lookup is None:
+				target_user = interaction.client.get_user(self.target_discord_id)
+				if target_user is None:
+					try:
+						target_user = await interaction.client.fetch_user(self.target_discord_id)
+					except Exception:
+						target_user = None
+				if target_user is not None:
+					try:
+						get_or_create_discord_user(
+							discord_id=str(target_user.id),
+							discord_username=target_user.name,
+							avatar_url=str(target_user.display_avatar.url),
+						)
+					except Exception:
+						pass
+					recipient_lookup = find_user_by_discord_id(str(self.target_discord_id))
+
+		if recipient_lookup is None:
+			recipient_lookup = find_user_by_global_id(self.target_user_id)
 
 		if not recipient_lookup:
 			await interaction.response.send_message("❌ No se pudo registrar al destinatario.", ephemeral=True)
+			return
+
+		if sender_lookup.user_id == recipient_lookup.user_id:
+			await interaction.response.send_message("No puedes donarte a ti mismo.", ephemeral=True)
 			return
 
 		result = transfer_points(
@@ -85,27 +261,31 @@ class DonationConfirmView(discord.ui.View):
 		embed = discord.Embed(
 			title="✅ Donación realizada",
 			description=(
-				f"Has donado **{self.amount:,.2f} {self.currency_symbol}** a {self.target_discord_user.mention}\n"
-				f"💸 Tu nuevo balance: **{float(result['from_balance']):,.2f} {self.currency_symbol}**"
+				f"Has donado **{_fmt_amount(self.amount)} {self.currency_symbol}** a {self.target_label}\n"
+				f"💸 Tu nuevo balance: **{_fmt_amount(float(result['from_balance']))} {self.currency_symbol}**"
 			),
 			color=discord.Color.green()
 		)
 		embed.set_footer(text=f"Donación • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 		await interaction.response.send_message(embed=embed, ephemeral=True)
 
-		try:
-			notify_embed = discord.Embed(
-				title="🎁 Has recibido una donación",
-				description=(
-					f"{interaction.user.mention} te donó **{self.amount:,.2f} {self.currency_symbol}**\n"
-					f"💰 Tu nuevo balance: **{float(result['to_balance']):,.2f} {self.currency_symbol}**"
-				),
-				color=discord.Color.gold()
-			)
-			notify_embed.set_footer(text=f"Donación • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-			await self.target_discord_user.send(embed=notify_embed)
-		except Exception:
-			pass
+		if self.target_discord_id is not None:
+			try:
+				target_user = interaction.client.get_user(self.target_discord_id)
+				if target_user is None:
+					target_user = await interaction.client.fetch_user(self.target_discord_id)
+				notify_embed = discord.Embed(
+					title="🎁 Has recibido una donación",
+					description=(
+						f"{interaction.user.mention} te donó **{_fmt_amount(self.amount)} {self.currency_symbol}**\n"
+						f"💰 Tu nuevo balance: **{_fmt_amount(float(result['to_balance']))} {self.currency_symbol}**"
+					),
+					color=discord.Color.gold()
+				)
+				notify_embed.set_footer(text=f"Donación • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+				await target_user.send(embed=notify_embed)
+			except Exception:
+				pass
 
 	@discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary)
 	async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -115,28 +295,81 @@ class DonationConfirmView(discord.ui.View):
 class DonationView(discord.ui.View):
 	"""Botón público para que otros usuarios donen el monto fijo."""
 
-	def __init__(self, target_discord_user: discord.User, amount: float, currency_symbol: str):
+	def __init__(
+		self,
+		*,
+		target_user_id: int,
+		target_label: str,
+		amount: float,
+		currency_symbol: str,
+		custom_id: str,
+		target_discord_id: Optional[int] = None,
+	):
 		super().__init__(timeout=None)
-		self.target_discord_user = target_discord_user
+		self.target_user_id = int(target_user_id)
+		self.target_label = target_label
+		self.target_discord_id = int(target_discord_id) if target_discord_id is not None else None
 		self.amount = round(float(amount), 2)
 		self.currency_symbol = currency_symbol
+		self.custom_id = custom_id
 
-	@discord.ui.button(label="💸 Donar", style=discord.ButtonStyle.success)
-	async def donate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+		donate_button = discord.ui.Button(
+			label="💸 Donar",
+			style=discord.ButtonStyle.success,
+			custom_id=self.custom_id,
+		)
+		donate_button.callback = self._on_donate_click
+		self.add_item(donate_button)
+
+	async def _on_donate_click(self, interaction: discord.Interaction):
 		confirm_view = DonationConfirmView(
-			target_discord_user=self.target_discord_user,
+			target_user_id=self.target_user_id,
+			target_label=self.target_label,
 			amount=self.amount,
 			currency_symbol=self.currency_symbol,
+			target_discord_id=self.target_discord_id,
 		)
 		embed = discord.Embed(
 			title="Confirmar donación",
-			description=f"¿Seguro que quieres donar **{self.amount:,.2f} {self.currency_symbol}** a {self.target_discord_user.mention}?",
+			description=(
+				f"¿Seguro que quieres donar **{_fmt_amount(self.amount)} {self.currency_symbol}**"
+				f" a {self.target_label}?"
+			),
 			color=discord.Color.blurple(),
 		)
 		await interaction.response.send_message(embed=embed, ephemeral=True, view=confirm_view)
 
 
-async def send_donation_embed(interaction: discord.Interaction, amount: float) -> discord.Embed:
+def _build_donation_custom_id(guild_id: int, donation_id: str) -> str:
+	return f"powerbot:donation:{guild_id}:{donation_id}"
+
+
+async def register_persistent_donation_buttons(bot: commands.Bot) -> None:
+	"""Re-registra vistas persistentes de donación tras reinicios del bot."""
+	for guild in bot.guilds:
+		for entry in DonationButtonRegistry.list_entries(guild.id):
+			try:
+				view = DonationView(
+					target_user_id=int(entry["target_user_id"]),
+					target_label=str(entry["target_label"]),
+					amount=float(entry["amount"]),
+					currency_symbol=str(entry["currency_symbol"]),
+					custom_id=str(entry["custom_id"]),
+					target_discord_id=int(entry["target_discord_id"])
+					if entry.get("target_discord_id") is not None
+					else None,
+				)
+				bot.add_view(view)
+			except Exception:
+				continue
+
+
+async def send_donation_embed(
+	interaction: discord.Interaction,
+	amount: float,
+	target_discord_user: Optional[discord.User] = None,
+	target_global_user_id: Optional[int] = None,
+) -> discord.Embed:
 	"""Publica un embed con botón para donaciones públicas de monto fijo."""
 	if interaction.guild is None:
 		return discord.Embed(
@@ -153,50 +386,145 @@ async def send_donation_embed(interaction: discord.Interaction, amount: float) -
 			color=discord.Color.red(),
 		)
 
+	if target_discord_user is not None and target_global_user_id is not None:
+		return discord.Embed(
+			title="❌ Parámetros inválidos",
+			description="Usa solo @usuario o ID universal, no ambos.",
+			color=discord.Color.red(),
+		)
+
 	economy_config = get_economy_config(interaction.guild.id)
 	currency_symbol = economy_config.get_currency_symbol()
 
-	creator_lookup = find_user_by_discord_id(str(interaction.user.id))
-	if not creator_lookup:
-		try:
-			get_or_create_discord_user(
-				discord_id=str(interaction.user.id),
-				discord_username=interaction.user.name,
-				avatar_url=str(interaction.user.display_avatar.url)
-			)
-		except Exception:
-			pass
-		creator_lookup = find_user_by_discord_id(str(interaction.user.id))
+	if target_discord_user is None and target_global_user_id is None:
+		target_discord_user = interaction.user
 
-	if not creator_lookup:
-		return discord.Embed(
-			title="❌ Error",
-			description="No se pudo registrar tu cuenta para crear la donación.",
-			color=discord.Color.red(),
-		)
+	target_lookup = None
+	target_label = ""
+	target_avatar_url: Optional[str] = None
+	target_discord_id: Optional[int] = None
+
+	if target_discord_user is not None:
+		target_discord_id = int(target_discord_user.id)
+		target_lookup = find_user_by_discord_id(str(target_discord_user.id))
+		if not target_lookup:
+			try:
+				get_or_create_discord_user(
+					discord_id=str(target_discord_user.id),
+					discord_username=target_discord_user.name,
+					avatar_url=str(target_discord_user.display_avatar.url),
+				)
+			except Exception:
+				pass
+			target_lookup = find_user_by_discord_id(str(target_discord_user.id))
+
+		if not target_lookup:
+			return discord.Embed(
+				title="❌ Error",
+				description="No se pudo registrar al destinatario de la donación.",
+				color=discord.Color.red(),
+			)
+
+		target_label = target_discord_user.mention
+	else:
+		candidate_id = int(target_global_user_id)
+		target_lookup = find_user_by_global_id(candidate_id)
+
+		# Fallback: permitir que el campo user_id acepte también Discord ID.
+		if not target_lookup:
+			discord_lookup = find_user_by_discord_id(str(candidate_id))
+			if discord_lookup:
+				target_lookup = discord_lookup
+
+		if not target_lookup:
+			return discord.Embed(
+				title="❌ Usuario no encontrado",
+				description=(
+					f"No existe ningún usuario con ID universal `{target_global_user_id}` "
+					"ni con ese Discord ID."
+				),
+				color=discord.Color.red(),
+			)
+
+		if target_lookup.discord_profile:
+			target_discord_id = int(target_lookup.discord_profile.discord_id)
+			target_label = f"<@{target_discord_id}>"
+		else:
+			target_label = f"**{target_lookup.display_name}**"
+
+	target_avatar_file = await _resolve_avatar_url_for_target(
+		target_lookup=target_lookup,
+		target_discord_user=target_discord_user,
+	)
+
+	target_user_id = int(target_lookup.user_id)
+	donation_id = uuid.uuid4().hex[:12]
+	custom_id = _build_donation_custom_id(interaction.guild.id, donation_id)
 
 	embed = discord.Embed(
 		title="🎁 Donación abierta",
 		description=(
-			f"**Destino:** `ID:{creator_lookup.user_id}` {interaction.user.mention}\n"
-			f"**Monto por click:** **{amount:,.2f} {currency_symbol}**\n\n"
+			f"**Destino:** `ID:{target_user_id}` {target_label}\n"
+			f"**Monto por click:** **{_fmt_amount(amount)} {currency_symbol}**\n\n"
 			"Pulsa el botón para donar ese monto."
 		),
 		color=discord.Color.gold(),
 	)
-	embed.set_thumbnail(url=interaction.user.display_avatar.url)
+	files: list[discord.File] = []
+	if target_avatar_file is not None:
+		embed.set_thumbnail(url=f"attachment://{target_avatar_file.filename}")
+		files.append(target_avatar_file)
 	embed.set_footer(text=f"Creado • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
 	view = DonationView(
-		target_discord_user=interaction.user,
+		target_user_id=target_user_id,
+		target_label=target_label,
 		amount=amount,
 		currency_symbol=currency_symbol,
+		custom_id=custom_id,
+		target_discord_id=target_discord_id,
 	)
-	await interaction.followup.send(embed=embed, view=view, ephemeral=False)
+	if interaction.channel is None:
+		return discord.Embed(
+			title="❌ Error",
+			description="No se pudo publicar el panel en este canal.",
+			color=discord.Color.red(),
+		)
 
+	message = await interaction.channel.send(
+		embed=embed,
+		view=view,
+		files=files if files else None,
+	)
+
+	entry = {
+		"donation_id": donation_id,
+		"custom_id": custom_id,
+		"owner_user_id": target_user_id,
+		"target_user_id": target_user_id,
+		"target_label": target_label,
+		"target_discord_id": target_discord_id,
+		"amount": amount,
+		"currency_symbol": currency_symbol,
+		"channel_id": int(message.channel.id),
+		"message_id": int(message.id),
+		"created_by_discord_id": int(interaction.user.id),
+		"created_ts": time.time(),
+	}
+	removed = await DonationButtonRegistry.register(
+		bot=interaction.client,
+		guild_id=interaction.guild.id,
+		entry=entry,
+		max_active_per_owner=2,
+	)
+	interaction.client.add_view(view)
+
+	confirm_text = "Tu panel de donación se publicó en este canal."
+	if removed > 0:
+		confirm_text += " Se reemplazó el panel más antiguo para respetar el límite de 2 activos."
 	return discord.Embed(
 		title="✅ Publicado",
-		description="Tu panel de donación se publicó en este canal.",
+		description=confirm_text,
 		color=discord.Color.green(),
 	)
 

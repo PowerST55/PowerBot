@@ -133,6 +133,12 @@ async def cmd_help(ctx: CommandContext) -> None:
 	ctx.print("                   • web off        - Apaga servidor web")
 	ctx.print("                   • web status     - Estado del servidor web")
 	ctx.print("                   • web autorun    - Alterna arranque automático")
+	ctx.print("  store <subcmd> - Control del servicio store")
+	ctx.print("                   • store          - Alterna ON/OFF")
+	ctx.print("                   • store on       - Enciende servicio store")
+	ctx.print("                   • store off      - Apaga servicio store")
+	ctx.print("                   • store status   - Estado del servicio store")
+	ctx.print("                   • store autorun  - Alterna arranque automático")
 	ctx.print("  livefeed <subcmd>- Autoriza/rechaza acceso por IP")
 	ctx.print("                   • livefeed status - Ver solicitud pendiente")
 	ctx.print("                   • livefeed allow  - Autorizar última solicitud")
@@ -246,6 +252,12 @@ async def cmd_web(ctx: CommandContext) -> None:
 	await cmd_web_impl(ctx)
 
 
+async def cmd_store(ctx: CommandContext) -> None:
+	"""Comando store - ejecuta subcomandos para controlar el servicio store."""
+	from .store.general import cmd_store as cmd_store_impl
+	await cmd_store_impl(ctx)
+
+
 async def cmd_wsocket(ctx: CommandContext) -> None:
 	"""Comando wsocket - ejecuta subcomandos para websocket local."""
 	from .websocket.general import cmd_wsocket as cmd_wsocket_impl
@@ -315,6 +327,7 @@ _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
 	"youtube": cmd_yt,
 	"yapi": cmd_yapi,
 	"web": cmd_web,
+	"store": cmd_store,
 	"discord": cmd_discord,
 	"backup": cmd_backup,
 	"livefeed": cmd_livefeed,

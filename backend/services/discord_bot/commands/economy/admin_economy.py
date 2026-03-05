@@ -11,10 +11,66 @@ from discord.ext import commands
 from backend.managers import get_or_create_discord_user, get_user_by_id
 from backend.managers import economy_manager
 from backend.services.discord_bot.config.economy import get_economy_config
+from backend.services.discord_bot.commands.economy.user_economy import send_donation_embed
 
 
 def setup_admin_economy_commands(bot: commands.Bot) -> None:
 	"""Registra comandos de economia para moderacion"""
+
+	admin_crear_group = app_commands.Group(
+		name="admin_crear",
+		description="Crear acciones públicas como administrador",
+	)
+
+	@admin_crear_group.command(
+		name="donacion",
+		description="Crea un panel de donación para otro usuario",
+	)
+	@app_commands.describe(
+		target="Usuario de Discord destino de la donación",
+		user_id="ID universal destino de la donación",
+		amount="Monto fijo por click",
+	)
+	async def admin_crear_donacion(
+		interaction: discord.Interaction,
+		target: Optional[discord.User] = None,
+		user_id: Optional[int] = None,
+		amount: float = 0.0,
+	):
+		if not interaction.user.guild_permissions.administrator:
+			await _deny_permission(interaction)
+			return
+
+		if target is None and user_id is None:
+			await interaction.response.send_message(
+				embed=discord.Embed(
+					title="❌ Destino no especificado",
+					description="Debes usar @usuario o user_id.",
+					color=discord.Color.red(),
+				),
+				ephemeral=True,
+			)
+			return
+
+		if target is not None and user_id is not None:
+			await interaction.response.send_message(
+				embed=discord.Embed(
+					title="❌ Parámetros contradictorios",
+					description="Usa solo @usuario o user_id, no ambos.",
+					color=discord.Color.red(),
+				),
+				ephemeral=True,
+			)
+			return
+
+		await interaction.response.defer(ephemeral=True)
+		result_embed = await send_donation_embed(
+			interaction,
+			amount,
+			target_discord_user=target,
+			target_global_user_id=user_id,
+		)
+		await interaction.followup.send(embed=result_embed, ephemeral=True)
 
 	@bot.tree.command(name="aps", description="Agrega puntos a un usuario (solo admin)")
 	@app_commands.describe(
@@ -128,6 +184,8 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 			color=discord.Color.red()
 		)
 		await interaction.followup.send(embed=embed)
+
+	bot.tree.add_command(admin_crear_group)
 
 
 def _resolve_target(
