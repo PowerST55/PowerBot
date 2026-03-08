@@ -113,13 +113,23 @@
 
         function connect() {
             const params = new URLSearchParams(window.location.search);
-                const directUrl = params.get("ws");
-                const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-                const host = params.get("wshost") || window.location.hostname || "127.0.0.1";
-                const inferredPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
-                const port = params.get("wsport") || inferredPort || "19131";
+            const directUrl = params.get("ws");
+            const protocol = window.location.protocol === "https:" ? "wss" : "ws";
             const path = params.get("wspath") || "/ws";
-            const wsUrl = directUrl || `${protocol}://${host}:${port}${path}`;
+
+            let wsUrl = directUrl;
+            if (!wsUrl) {
+                const explicitHost = params.get("wshost");
+                const explicitPort = params.get("wsport");
+                if (explicitHost || explicitPort) {
+                    const host = explicitHost || window.location.hostname || "127.0.0.1";
+                    const inferredPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+                    const port = explicitPort || inferredPort;
+                    wsUrl = `${protocol}://${host}:${port}${path}`;
+                } else {
+                    wsUrl = `${protocol}://${window.location.host}${path}`;
+                }
+            }
 
             const socket = new WebSocket(wsUrl);
             socket.onopen = () => console.log("Conectado al WebSocket");

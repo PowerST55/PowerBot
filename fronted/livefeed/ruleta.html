@@ -553,11 +553,19 @@ function buildWebSocketUrl() {
     }
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const host = params.get("wshost") || window.location.hostname || "127.0.0.1";
-    // Conectar directo al servidor de eventos para evitar el proxy /ws del servidor web.
-    const port = params.get("wsport") || "8765";
     const path = params.get("wspath") || "/ws";
-    return `${protocol}://${host}:${port}${path}`;
+
+    // Por defecto usamos mismo origen para entrar por el proxy /ws del servidor web.
+    const explicitHost = params.get("wshost");
+    const explicitPort = params.get("wsport");
+    if (explicitHost || explicitPort) {
+        const host = explicitHost || window.location.hostname || "127.0.0.1";
+        const inferredPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+        const port = explicitPort || inferredPort;
+        return `${protocol}://${host}:${port}${path}`;
+    }
+
+    return `${protocol}://${window.location.host}${path}`;
 }
 
 const WS_URL = buildWebSocketUrl();
