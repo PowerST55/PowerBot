@@ -503,6 +503,7 @@ def apply_balance_delta(
 	guild_id: Optional[str] = None,
 	channel_id: Optional[str] = None,
 	source_id: Optional[str] = None,
+	allow_negative_balance: bool = False,
 ) -> float:
 	"""Aplica un delta de saldo en wallet por plataforma y devuelve el total resultante."""
 	platform = str(platform or "discord").lower()
@@ -535,17 +536,24 @@ def apply_balance_delta(
 		if delta > 0:
 			new_total = _credit_platform_balance(conn, resolved_user_id, platform, delta, now_iso)
 		else:
-			ok = _deduct_from_combined_balance(
-				conn,
-				resolved_user_id,
-				abs(delta),
-				preferred_platform=platform,
-				now_iso=now_iso,
-			)
-			if not ok:
-				conn.rollback()
-				raise ValueError("Saldo insuficiente para aplicar el delta")
-			new_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
+			if allow_negative_balance:
+				conn.execute(
+					"UPDATE platform_wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ? AND platform = ?",
+					(delta, now_iso, resolved_user_id, platform),
+				)
+				new_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
+			else:
+				ok = _deduct_from_combined_balance(
+					conn,
+					resolved_user_id,
+					abs(delta),
+					preferred_platform=platform,
+					now_iso=now_iso,
+				)
+				if not ok:
+					conn.rollback()
+					raise ValueError("Saldo insuficiente para aplicar el delta")
+				new_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
 
 		conn.execute(
 			"""

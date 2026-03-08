@@ -20,17 +20,17 @@ def setup_slots_commands(bot: commands.Bot) -> None:
 	"""Registra comandos de tragamonedas"""
 
 	@bot.tree.command(name="tragamonedas", description="Juega a la maquina tragamonedas. Alias: /tm")
-	@app_commands.describe(cantidad="Cantidad a apostar o 'all'")
-	async def tragamonedas(interaction: discord.Interaction, cantidad: str):
+	@app_commands.describe(cantidad="Cantidad a apostar, 'all' o vacio para auto-minimo")
+	async def tragamonedas(interaction: discord.Interaction, cantidad: Optional[str] = None):
 		await _run_slots(interaction, cantidad)
 
 	@bot.tree.command(name="tm", description="Alias de /tragamonedas")
-	@app_commands.describe(cantidad="Cantidad a apostar o 'all'")
-	async def tm(interaction: discord.Interaction, cantidad: str):
+	@app_commands.describe(cantidad="Cantidad a apostar, 'all' o vacio para auto-minimo")
+	async def tm(interaction: discord.Interaction, cantidad: Optional[str] = None):
 		await _run_slots(interaction, cantidad)
 
 
-async def _run_slots(interaction: discord.Interaction, cantidad: str) -> None:
+async def _run_slots(interaction: discord.Interaction, cantidad: Optional[str]) -> None:
 	economy_config = get_economy_config(interaction.guild.id)
 	currency_name = economy_config.get_currency_name()
 	currency_symbol = economy_config.get_currency_symbol()
@@ -57,10 +57,13 @@ async def _run_slots(interaction: discord.Interaction, cantidad: str) -> None:
 
 	current_balance = _get_current_balance(user.user_id)
 
-	bet_amount, error = _parse_bet_amount(cantidad, current_balance)
-	if error:
-		await interaction.response.send_message(error, ephemeral=True)
-		return
+	if cantidad is None:
+		bet_amount = _resolve_default_bet_amount(min_limit)
+	else:
+		bet_amount, error = _parse_bet_amount(cantidad, current_balance)
+		if error:
+			await interaction.response.send_message(error, ephemeral=True)
+			return
 
 	# Verificar limite inferior
 	if min_limit > 0 and bet_amount < min_limit:
@@ -161,6 +164,11 @@ async def _run_slots(interaction: discord.Interaction, cantidad: str) -> None:
 	embed.timestamp = datetime.now(timezone.utc)
 
 	await interaction.followup.send(embed=embed)
+
+
+def _resolve_default_bet_amount(min_limit: float) -> int:
+	"""Apuesta por defecto para comando sin cantidad: max(min_limit, 5)."""
+	return int(max(float(min_limit or 0.0), 5.0))
 
 
 def _parse_bet_amount(value: str, current_balance: float) -> tuple[Optional[int], Optional[str]]:

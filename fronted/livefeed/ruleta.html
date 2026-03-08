@@ -25,7 +25,7 @@
         <div id="winner-container">
             <h2 id="winner-title">Felicidades A Nuestro Ganador:</h2>
             <div class="winner-content">
-                <img id="winner-image" class="winner-image" src="image-url.jpg" alt="Winner Image" />
+                <img id="winner-image" class="winner-image" src="" alt="Winner Image" />
                 <span id="winner-name" class="winner-name">Nombre Del Ganador</span>
             </div>
             <div class="progress-container">
@@ -63,10 +63,132 @@
         let canvas = document.getElementById("wheel");
         let ctx = canvas.getContext("2d");
         let size = 519;
-        const scale = size / 1000;
+        let scale = size / 1000;
         let currentRotation = 0;
         let socket;
         let placeholderprofile = "https://th.bing.com/th/id/OIP.aiDGdmdUAX_iNgRMERipyQHaHF?rs=1&pid=ImgDetMain"
+
+        // Configuracion de velocidad de ruleta (ms y grados/frame).
+        const IDLE_ROTATION_BASE_DEG = 0.035;
+        const IDLE_ROTATION_PER_USER_DEG = 0.0018;
+        const IDLE_ROTATION_MIN_DEG = 0.012;
+        const SPIN_BASE_MIN_MS = 6000;
+        const SPIN_BASE_RANDOM_MS = 1800;
+        const SPIN_USER_THRESHOLD = 8;
+        const SPIN_PER_USER_MS_LOW = 420;
+        const SPIN_PER_USER_MS_HIGH = 780;
+        const SPIN_EXTRA_CURVE_MS = 36;
+        const SPIN_MAX_DURATION_MS = 26000;
+
+        function hashString(value) {
+            let hash = 0;
+            const text = String(value || "");
+            for (let i = 0; i < text.length; i++) {
+                hash = ((hash << 5) - hash) + text.charCodeAt(i);
+                hash |= 0;
+            }
+            return Math.abs(hash);
+        }
+
+        function fallbackColorFromText(text) {
+            const h = hashString(text) % 360;
+            return `hsl(${h} 80% 22%)`;
+        }
+
+        function normalizeDisplayName(name) {
+            return String(name || "").replace(/^@+/, "").trim();
+        }
+
+        function rgbToHsl(r, g, b) {
+            r /= 255;
+            g /= 255;
+            b /= 255;
+            const max = Math.max(r, g, b);
+            const min = Math.min(r, g, b);
+            let h = 0;
+            let s = 0;
+            const l = (max + min) / 2;
+
+            if (max !== min) {
+                const d = max - min;
+                s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                switch (max) {
+                    case r:
+                        h = (g - b) / d + (g < b ? 6 : 0);
+                        break;
+                    case g:
+                        h = (b - r) / d + 2;
+                        break;
+                    default:
+                        h = (r - g) / d + 4;
+                        break;
+                }
+                h /= 6;
+            }
+
+            return {
+                h: Math.round(h * 360),
+                s: Math.round(s * 100),
+                l: Math.round(l * 100),
+            };
+        }
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function getIdleRotationSpeedDeg() {
+            const participants = Math.max(0, items.length);
+            const dynamicSpeed = IDLE_ROTATION_BASE_DEG - (participants * IDLE_ROTATION_PER_USER_DEG);
+            return clamp(dynamicSpeed, IDLE_ROTATION_MIN_DEG, IDLE_ROTATION_BASE_DEG);
+        }
+
+        function extractAverageColor(image, fallbackText) {
+            try {
+                const sampleSize = 24;
+                const sampleCanvas = document.createElement("canvas");
+                sampleCanvas.width = sampleSize;
+                sampleCanvas.height = sampleSize;
+                const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+
+                if (!sampleCtx) {
+                    return fallbackColorFromText(fallbackText);
+                }
+
+                sampleCtx.drawImage(image, 0, 0, sampleSize, sampleSize);
+                const data = sampleCtx.getImageData(0, 0, sampleSize, sampleSize).data;
+
+                let r = 0;
+                let g = 0;
+                let b = 0;
+                let count = 0;
+
+                for (let i = 0; i < data.length; i += 4) {
+                    const alpha = data[i + 3];
+                    if (alpha < 25) continue;
+                    r += data[i];
+                    g += data[i + 1];
+                    b += data[i + 2];
+                    count += 1;
+                }
+
+                if (count === 0) {
+                    return fallbackColorFromText(fallbackText);
+                }
+
+                const avgR = Math.round(r / count);
+                const avgG = Math.round(g / count);
+                const avgB = Math.round(b / count);
+                const hsl = rgbToHsl(avgR, avgG, avgB);
+
+                // Oscurecer 30% el color promedio del avatar para mejorar contraste general.
+                const sat = clamp(hsl.s, 60, 95);
+                const light = clamp(Math.round(hsl.l * 0.7), 11, 24);
+                return `hsl(${hsl.h} ${sat}% ${light}%)`;
+            } catch (error) {
+                return fallbackColorFromText(fallbackText);
+            }
+        }
 
         // Elementos de audio
         const spinSounds = [
@@ -81,10 +203,23 @@
         const winnerSound = document.getElementById("winner-sound");
         const joinSound = document.getElementById("join-sound");
 
-        canvas.width = size;
-        canvas.height = size;
-        canvas.style.width = `${size}px`;
-        canvas.style.height = `${size}px`;
+        function calculateWheelSize() {
+            const maxByWidth = Math.floor(window.innerWidth * 0.62);
+            const maxByHeight = Math.floor(window.innerHeight * 0.74);
+            return Math.max(420, Math.min(760, maxByWidth, maxByHeight));
+        }
+
+        function applyResponsiveWheelSize() {
+            size = calculateWheelSize();
+            scale = size / 1000;
+            canvas.width = size;
+            canvas.height = size;
+            canvas.style.width = `${size}px`;
+            canvas.style.height = `${size}px`;
+            document.documentElement.style.setProperty('--wheel-size', `${size}px`);
+        }
+
+        applyResponsiveWheelSize();
         function drawWheel() {
             let total = items.length;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -116,10 +251,11 @@
             }
 
             let angle = (2 * Math.PI) / total;
-            let baseImgSize = 90 * scale; // Tamaño base de la imagen
-            let minImgSize = 50 * scale;  // Tamaño mínimo de la imagen si hay muchos items
+            let baseImgSize = 142 * scale; // Tamaño base de la imagen
+            let minImgSize = 62 * scale;  // Tamaño mínimo de la imagen si hay muchos items
             let imgSize = baseImgSize; // Inicializa el tamaño de la imagen
-            let fontSize; // Definir la variable aquí
+            // Ajusta aquí el grosor de las líneas/separadores de segmentos.
+            const segmentStrokeWidth = 5.8 * scale;
 
             // Ajustar el tamaño de la imagen según la cantidad de items
             if (total > 6) {
@@ -132,43 +268,61 @@
                 ctx.moveTo(size / 2, size / 2);
                 ctx.arc(size / 2, size / 2, size / 2, i * angle, (i + 1) * angle);
                 
-                ctx.fillStyle = `hsl(${(204 + i * (100 / total) + Math.random() * 10 - 5) % 360} 99% ${10 + Math.random() * 6}%)`;
+                ctx.fillStyle = items[i].color || fallbackColorFromText(items[i].text || i);
 
 
 
   //hsl(179, 53%, 25%)   hsl(${230 + i * (100 / total)}, 50%, 30%)
                 ctx.fill();
-                if (total > 1) {
-                    ctx.lineWidth = 4.2 * scale;
-                    ctx.strokeStyle = "white";
-                    ctx.stroke();
-                }
+                // Los separadores se dibujan al final en un solo pase para mantener grosor uniforme.
 
                 let img = new Image();
                 console.log("name", items[i].text, "img", items[i].image);
                 img.src = items[i].image.src;
 
-                // Renderizar el texto inmediatamente
+                // Renderizar avatar/texto en orientación tangencial (perpendiculares al centro).
+                const radialDistance = Math.max(size * 0.33, (size / 2) - imgSize - (18 * scale));
+                const avatarRadius = radialDistance - (130 * scale);
+                const textRadius = radialDistance + (20 * scale);
+                const avatarX = 0;
+                const avatarY = 0;
+                const textX = 0;
+                const textY = 0;
+
                 ctx.save();
                 ctx.translate(size / 2, size / 2);
                 ctx.rotate(i * angle + angle / 2);
-
-                let imgX = size / 7;
-                let textX = imgX + imgSize / 1.7 + 10; // Espacio adicional para el texto
-                let textY = 0;
+                ctx.translate(textRadius, 0);
+                ctx.rotate(Math.PI / 2);
 
                 ctx.fillStyle = "white";
-                ctx.textAlign = "left";
+                ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                let text = items[i].text.length > 12 ? items[i].text.substring(0, 12) + '-' : items[i].text;
-                let fontSize = Math.min(100 * scale, Math.max(50 * scale, (400 * scale) / text.length));
+                const displayName = normalizeDisplayName(items[i].text);
+                let text = displayName.length > 16 ? displayName.substring(0, 16) + '-' : displayName;
+                const participantScale = Math.max(0.62, Math.min(1.0, 1.22 - (total * 0.045)));
+                const fontMax = 124 * scale * participantScale;
+                const fontMin = 42 * scale * participantScale;
+                const fontByName = (460 * scale * participantScale) / Math.max(3, text.length);
+                let fontSize = Math.min(fontMax, Math.max(fontMin, fontByName));
                 ctx.font = `bold ${fontSize}px Oswald`;
 
-                ctx.shadowColor = 'rgba(0, 0, 0, 1)';
+                const arcLengthAtRadius = angle * radialDistance;
+                const textBoundaryPadding = 20 * scale;
+                const maxTextWidth = Math.max(90 * scale, arcLengthAtRadius - textBoundaryPadding);
+                while (text.length > 1 && ctx.measureText(text).width > maxTextWidth) {
+                    text = `${text.slice(0, -2)}-`;
+                }
+
+                // Resalte fuerte del nombre para stream (se compacta con más participantes).
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.78)';
                 ctx.shadowBlur = 10 * scale;
+                ctx.lineWidth = 6.2 * scale * participantScale;
+                ctx.lineJoin = "round";
+                ctx.strokeStyle = "rgba(0, 0, 0, 0.82)";
+                ctx.strokeText(text, textX, textY);
                 ctx.fillText(text, textX, textY);
                 ctx.shadowBlur = 0;
-
                 ctx.restore();
 
                 img.onload = (function (index, imageAngle) {
@@ -176,14 +330,56 @@
                         ctx.save();
                         ctx.translate(size / 2, size / 2);
                         ctx.rotate(imageAngle + angle / 2);
+                        ctx.translate(avatarRadius, 0);
+                        ctx.rotate(Math.PI / 2);
 
                         ctx.beginPath();
-                        ctx.arc(imgX, 0, imgSize / 2, 0, Math.PI * 2);
+                        ctx.arc(avatarX, avatarY, (imgSize / 2) + (4.8 * scale), 0, Math.PI * 2);
                         ctx.clip();
-                        ctx.drawImage(img, imgX - imgSize / 2, -imgSize / 2, imgSize, imgSize);
+                        ctx.drawImage(img, avatarX - imgSize / 2, avatarY - imgSize / 2, imgSize, imgSize);
+
+                        // Contorno blanco para separar avatar del fondo del segmento.
+                        ctx.beginPath();
+                        ctx.arc(avatarX, avatarY, (imgSize / 2) + (4.8 * scale), 0, Math.PI * 2);
+                        ctx.lineWidth = 10 * scale;
+                        ctx.strokeStyle = "#ffffff";
+                        ctx.stroke();
                         ctx.restore();
                     };
                 })(i, i * angle);
+            }
+
+            if (total === 2) {
+                // Para 2 usuarios: diámetro en el límite real entre ambos segmentos (0°/180°).
+                // Esto separa ambas mitades sin atravesar el centro visual de cada usuario.
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(0, size / 2);
+                ctx.lineTo(size, size / 2);
+                ctx.lineWidth = segmentStrokeWidth;
+                ctx.strokeStyle = "white";
+                ctx.lineCap = "butt";
+                ctx.stroke();
+                ctx.restore();
+            } else if (total >= 3) {
+                // Para 3+ usuarios: separadores radiales en pase único para evitar líneas más finas.
+                ctx.save();
+                ctx.lineWidth = segmentStrokeWidth;
+                ctx.strokeStyle = "white";
+                ctx.lineCap = "butt";
+
+                for (let i = 0; i < total; i++) {
+                    const separatorAngle = i * angle;
+                    const endX = (size / 2) + Math.cos(separatorAngle) * (size / 2);
+                    const endY = (size / 2) + Math.sin(separatorAngle) * (size / 2);
+
+                    ctx.beginPath();
+                    ctx.moveTo(size / 2, size / 2);
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+                }
+
+                ctx.restore();
             }
 
 
@@ -195,7 +391,7 @@
 
         function rotateWheelSlowly() {
             if (!slowRotation) return;
-            currentRotation += 0.08; // Ajusta la velocidad del giro lento
+            currentRotation += getIdleRotationSpeedDeg(); // En reposo: más lenta y baja con más participantes
             canvas.style.transform = `rotate(${currentRotation}deg)`;
             requestAnimationFrame(rotateWheelSlowly);
         }
@@ -207,7 +403,17 @@
             slowRotation = false;
             canvas.style.transition = "none";
 
-            let spinDuration = 5000 + Math.random() * 3000; // Entre 5s y 8s
+            const participants = Math.max(2, items.length);
+            // Duracion base + escalado agresivo para que con muchos usuarios sea mucho mas lenta.
+            const baseDuration = SPIN_BASE_MIN_MS + Math.random() * SPIN_BASE_RANDOM_MS;
+            const lowTierUsers = Math.min(participants, SPIN_USER_THRESHOLD);
+            const highTierUsers = Math.max(0, participants - SPIN_USER_THRESHOLD);
+            const participantExtra =
+                (lowTierUsers * SPIN_PER_USER_MS_LOW) +
+                (highTierUsers * SPIN_PER_USER_MS_HIGH) +
+                ((highTierUsers * highTierUsers) * SPIN_EXTRA_CURVE_MS);
+            let spinDuration = baseDuration + participantExtra;
+            spinDuration = Math.min(spinDuration, SPIN_MAX_DURATION_MS);
             let startRotation = currentRotation;
             let startTime = performance.now();
             let lastIndex = -1;
@@ -318,7 +524,7 @@
             winnerOverlay.style.background = winnerColor;
 
             // Ajustar el contenido
-            winnerNameElement.textContent = winner;
+            winnerNameElement.textContent = normalizeDisplayName(winner);
             winnerImgElement.src = winnerimg;
 
             // Reproducir sonido
@@ -339,15 +545,6 @@
             }, 5000);
         }
         
-        // Enviar un mensaje al servidor
-function sendMessageToServer(message) {
-    if (socket.readyState === WebSocket.OPEN) { // Asegúrate de que la conexión está abierta
-        socket.send(JSON.stringify(message)); // Convierte el mensaje en formato JSON y lo envía
-        console.log("Mensaje enviado:", message);
-    } else {
-        console.error("La conexión no está abierta, no se pudo enviar el mensaje.");
-    }
-}
 function buildWebSocketUrl() {
     const params = new URLSearchParams(window.location.search);
     const directUrl = params.get("ws");
@@ -357,19 +554,44 @@ function buildWebSocketUrl() {
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const host = params.get("wshost") || window.location.hostname || "127.0.0.1";
-    const inferredPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
-    const port = params.get("wsport") || inferredPort || "19131";
+    // Conectar directo al servidor de eventos para evitar el proxy /ws del servidor web.
+    const port = params.get("wsport") || "8765";
     const path = params.get("wspath") || "/ws";
     return `${protocol}://${host}:${port}${path}`;
 }
 
 const WS_URL = buildWebSocketUrl();
-socket = new WebSocket(WS_URL); // Crear nueva conexión
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let redirectInProgress = false;
+
+function scheduleReconnect() {
+    if (redirectInProgress) return;
+    if (reconnectTimer) return;
+
+    const delayMs = Math.min(9000, Math.round(800 * Math.pow(1.7, reconnectAttempts)));
+    reconnectAttempts += 1;
+    console.warn(`Reintentando WebSocket en ${delayMs}ms (intento ${reconnectAttempts})`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+    }, delayMs);
+}
+
 function connect() {
     const joinSound = document.getElementById("join-sound");
 
+    try {
+        socket = new WebSocket(WS_URL);
+    } catch (error) {
+        console.error("No se pudo crear socket:", error);
+        scheduleReconnect();
+        return;
+    }
+
     socket.onopen = () => {
         console.log("Conectado al WebSocket");
+        reconnectAttempts = 0;
         document.querySelector('.container').classList.add('enter');
         
         // Marcar que la animación terminó después de 1.6 segundos
@@ -391,8 +613,12 @@ function connect() {
         console.log("Mensaje recibido:", data);
 
         switch (data.type) {
+            case "connected":
+                // Mensaje handshake del servidor WS.
+                break;
             case "redirect":
                 console.log("Redirigiendo a:", data.url);
+                redirectInProgress = true;
                 // Agregar clase de salida y esperar a que termine la animación
                 const container = document.querySelector('.container');
                 container.classList.add('exit');
@@ -404,7 +630,8 @@ function connect() {
                 break;
             case "add_item":
                 loadImage(data.url).then((image) => {
-                    items.push({ text: data.item, image: image });
+                    const itemColor = extractAverageColor(image, data.item);
+                    items.push({ text: data.item, image: image, color: itemColor });
                     console.log(items);
                     drawWheel();
 
@@ -441,12 +668,18 @@ function connect() {
     };
 
     socket.onclose = () => {
-        console.warn("WebSocket cerrado, redirigiendo a index.html...");
-        window.location.href = "index.html";
+        if (redirectInProgress) {
+            return;
+        }
+        console.warn("WebSocket cerrado, intentando reconexión...");
+        scheduleReconnect();
     };
 
     socket.onerror = (error) => {
         console.error("Error en WebSocket:", error);
+        if (socket && socket.readyState !== WebSocket.CLOSED) {
+            socket.close();
+        }
     };
 }
 function sendMessageToServer(message) {
@@ -477,19 +710,17 @@ function toggleMiniMode(isMini) {
     }
 }
 
-// Llamar a connect() para iniciar la conexión
-connect();
-
-
         function loadImage(url) {
     return new Promise((resolve, reject) => {
         const image = new Image();
+        image.crossOrigin = "anonymous";
 
         // Resolver cuando la imagen está cargada
         image.onload = () => resolve(image);
 
         // Placeholder en caso de error
         image.onerror = () => {
+            image.crossOrigin = "anonymous";
             image.src = "https://th.bing.com/th/id/OIP.aiDGdmdUAX_iNgRMERipyQHaHF?rs=1&pid=ImgDetMain"; // Imagen de respaldo
             console.warn(`No se pudo cargar la imagen desde ${url}. Se usará el placeholder.`);
             resolve(image); // Resolver con el placeholder en lugar de rechazar
@@ -500,6 +731,15 @@ connect();
     });
 }
 
+
+        let resizeTimeout = null;
+        window.addEventListener("resize", () => {
+            if (resizeTimeout) clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                applyResponsiveWheelSize();
+                drawWheel();
+            }, 120);
+        });
 
         // Llamar a la conexión y el dibujo inicial
         connect();

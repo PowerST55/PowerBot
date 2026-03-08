@@ -85,6 +85,12 @@ class SpinWheelState:
 		self._participants[channel_key] = participant
 		return True, participant
 
+	def remove_participant(self, channel_id: str) -> bool:
+		channel_key = (channel_id or "").strip()
+		if not channel_key:
+			return False
+		return self._participants.pop(channel_key, None) is not None
+
 
 _spinwheel_state: SpinWheelState | None = None
 

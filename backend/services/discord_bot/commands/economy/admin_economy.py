@@ -171,7 +171,8 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 			user_id=lookup,
 			delta=-amount,
 			reason="admin_remove_points",
-			interaction=interaction
+			interaction=interaction,
+			allow_negative_balance=True,
 		)
 
 		embed = discord.Embed(
@@ -232,7 +233,8 @@ def _apply_balance_delta(
 	user_id: int,
 	delta: float,
 	reason: str,
-	interaction: discord.Interaction
+	interaction: discord.Interaction,
+	allow_negative_balance: bool = False,
 ) -> float:
 	return float(
 		economy_manager.apply_balance_delta(
@@ -243,6 +245,7 @@ def _apply_balance_delta(
 			guild_id=str(interaction.guild_id) if interaction.guild_id else None,
 			channel_id=str(interaction.channel_id) if interaction.channel_id else None,
 			source_id=f"admin:{interaction.id}",
+			allow_negative_balance=allow_negative_balance,
 		)
 	)
 

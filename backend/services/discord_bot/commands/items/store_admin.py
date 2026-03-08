@@ -10,6 +10,7 @@ from discord.ext import commands
 from backend.services.discord_bot.config import get_channels_config
 from backend.services.discord_bot.config.store import get_store_config
 from backend.services.discord_bot.bot_logging import log_success, log_error
+from backend.services.discord_bot.commands.items.store_item_editor import setup_store_item_editor_command
 from backend.services.discord_bot.store.store_packager import DiscordStorePackager
 
 
@@ -20,6 +21,7 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 		name="admin_store",
 		description="Herramientas de administración para la tienda",
 	)
+	setup_store_item_editor_command(bot, admin_store_group)
 
 	async def _create_forum_channel_compat(
 		guild: discord.Guild,
@@ -255,8 +257,11 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 		await interaction.followup.send(embed=embed, ephemeral=True)
 
 	@admin_store_group.command(name="sync", description="Sincroniza/publica los items de la tienda en el foro")
-	@app_commands.describe(force="Si es true, vuelve a publicar aunque ya exista hilo")
-	async def admin_store_sync(interaction: discord.Interaction, force: bool = False) -> None:
+	@app_commands.describe(
+		force="Si es true, vuelve a publicar aunque ya exista hilo",
+		item_id="ID interno opcional del item a sincronizar (ej: S1)",
+	)
+	async def admin_store_sync(interaction: discord.Interaction, force: bool = False, item_id: str | None = None) -> None:
 		if interaction.guild is None:
 			await interaction.response.send_message(
 				"Este comando solo puede ejecutarse dentro de un servidor.",
@@ -280,6 +285,7 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 				bot=bot,
 				guild_id=interaction.guild.id,
 				force_republish=force,
+				item_id=item_id,
 			)
 		except Exception as exc:
 			embed = discord.Embed(
@@ -305,8 +311,11 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 				color=discord.Color.orange(),
 			)
 			embed.add_field(name="Publicados", value=f"`{result.get('published', 0)}`", inline=True)
+			embed.add_field(name="Actualizados", value=f"`{result.get('updated', 0)}`", inline=True)
 			embed.add_field(name="Omitidos", value=f"`{result.get('skipped', 0)}`", inline=True)
 			embed.add_field(name="Fallidos", value=f"`{result.get('failed', 0)}`", inline=True)
+			if result.get("filtered_item_id"):
+				embed.add_field(name="Item objetivo", value=f"`{result.get('filtered_item_id')}`", inline=True)
 			await interaction.followup.send(embed=embed, ephemeral=True)
 			await log_error(
 				bot,
@@ -315,8 +324,10 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 				str(result.get("message", "Store sync fallida")),
 				fields={
 					"Publicados": result.get("published", 0),
+					"Actualizados": result.get("updated", 0),
 					"Omitidos": result.get("skipped", 0),
 					"Fallidos": result.get("failed", 0),
+					"Item ID": result.get("filtered_item_id") or "ALL",
 				},
 				user=interaction.user,
 			)
@@ -328,8 +339,11 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 			color=discord.Color.green(),
 		)
 		embed.add_field(name="Publicados", value=f"`{result.get('published', 0)}`", inline=True)
+		embed.add_field(name="Actualizados", value=f"`{result.get('updated', 0)}`", inline=True)
 		embed.add_field(name="Omitidos", value=f"`{result.get('skipped', 0)}`", inline=True)
 		embed.add_field(name="Fallidos", value=f"`{result.get('failed', 0)}`", inline=True)
+		if result.get("filtered_item_id"):
+			embed.add_field(name="Item objetivo", value=f"`{result.get('filtered_item_id')}`", inline=True)
 
 		sync = result.get("sync", {}) if isinstance(result.get("sync"), dict) else {}
 		embed.add_field(
@@ -341,7 +355,7 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 			),
 			inline=False,
 		)
-		embed.set_footer(text=f"/admin_store sync • force={force}")
+		embed.set_footer(text=f"/admin_store sync • force={force} • item_id={item_id or 'ALL'}")
 
 		await interaction.followup.send(embed=embed, ephemeral=True)
 		await log_success(
@@ -351,9 +365,11 @@ def setup_store_admin_commands(bot: commands.Bot) -> None:
 			"Se sincronizó el catálogo de tienda en el foro.",
 			fields={
 				"Publicados": result.get("published", 0),
+				"Actualizados": result.get("updated", 0),
 				"Omitidos": result.get("skipped", 0),
 				"Fallidos": result.get("failed", 0),
 				"Force": force,
+				"Item ID": result.get("filtered_item_id") or "ALL",
 			},
 			user=interaction.user,
 		)

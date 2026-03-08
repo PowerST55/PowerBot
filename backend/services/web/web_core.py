@@ -76,6 +76,7 @@ def _default_mounts() -> Iterable[tuple[str, Path]]:
 	return (
 		("/fronted", PROJECT_ROOT / "fronted"),
 		("/frontend", PROJECT_ROOT / "frontend"),
+		("/assets", PROJECT_ROOT / "assets"),
 		("/media", PROJECT_ROOT / "media"),
 	)
 
@@ -215,17 +216,26 @@ async def health() -> dict:
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
-	await ws.accept()
 	try:
 		websockets = importlib.import_module("websockets")
 	except ModuleNotFoundError:
 		logger.error("Dependencia 'websockets' requerida para el proxy /ws")
-		await ws.close(code=1011, reason="websockets module missing on server")
+		try:
+			await ws.close(code=1011, reason="websockets module missing on server")
+		except Exception:
+			pass
 		return
 
 	upstream_url = os.getenv("EVENTS_WS_INTERNAL_URL", EVENTS_WS_INTERNAL_URL)
 	try:
-		async with websockets.connect(upstream_url) as upstream:
+		async with websockets.connect(
+			upstream_url,
+			open_timeout=2,
+			close_timeout=1,
+			ping_interval=20,
+			ping_timeout=20,
+		) as upstream:
+			await ws.accept()
 			async def client_to_upstream() -> None:
 				try:
 					while True:
@@ -259,9 +269,26 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 			await asyncio.gather(client_to_upstream(), upstream_to_client())
 	except WebSocketDisconnect:
 		return
+	except TimeoutError:
+		logger.warning("Proxy /ws: timeout conectando a upstream %s", upstream_url)
+		try:
+			await ws.close(code=1013, reason="Upstream timeout")
+		except Exception:
+			pass
+	except OSError as exc:
+		logger.warning("Proxy /ws: upstream no disponible (%s): %s", upstream_url, exc)
+		try:
+			await ws.close(code=1013, reason="Upstream unavailable")
+		except Exception:
+			pass
+	except asyncio.CancelledError:
+		return
 	except Exception as exc:
-		logger.exception("Error en proxy WebSocket /ws hacia %s", upstream_url)
-		await ws.close(code=1011, reason="WebSocket proxy error")
+		logger.warning("Proxy /ws error hacia %s: %s", upstream_url, exc)
+		try:
+			await ws.close(code=1011, reason="WebSocket proxy error")
+		except Exception:
+			pass
 
 
 def run() -> None:

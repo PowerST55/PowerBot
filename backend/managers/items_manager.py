@@ -5,7 +5,7 @@ Sistema de carga automática con reconocimiento de source (gacha/store).
 """
 from __future__ import annotations
 from datetime import datetime
-from typing import Dict, Optional, List, Literal
+from typing import Any, Dict, Optional, List, Literal
 from pathlib import Path
 import json
 import shutil
@@ -136,6 +136,56 @@ def _load_item_json(json_path: Path) -> Optional[Dict]:
     except json.JSONDecodeError as e:
         print(f"❌ Error parseando JSON: {e}")
         return None
+
+
+def _load_store_config_json(config_path: Path) -> Optional[Dict[str, Any]]:
+    """Lee y normaliza config.json de tienda al esquema usado por items_manager.
+
+    Solo se consideran items de categoria 'card'. Los 'sound' se ignoran.
+    """
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        if not isinstance(raw, dict):
+            return None
+
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+        category = str(metadata.get("categoria") or metadata.get("category") or "").strip().lower()
+        if category != "card":
+            # sound u otras categorías no forman parte del catálogo global de items.
+            return None
+
+        item_key = str(raw.get("item_key") or "").strip()
+        nombre = str(raw.get("nombre") or item_key).strip()
+        descripcion = str(raw.get("descripcion") or "").strip()
+        rareza = str(raw.get("rareza") or "common").strip().lower() or "common"
+
+        if not item_key or not nombre:
+            return None
+
+        stats = raw.get("stats") if isinstance(raw.get("stats"), dict) else {}
+
+        return {
+            "item_key": item_key,
+            "nombre": nombre,
+            "descripcion": descripcion,
+            "rareza": rareza,
+            "stats": {
+                "ataque": int(stats.get("ataque", 0) or 0),
+                "defensa": int(stats.get("defensa", 0) or 0),
+                "vida": int(stats.get("vida", 0) or 0),
+                "armadura": int(stats.get("armadura", 0) or 0),
+                "mantenimiento": int(stats.get("mantenimiento", 0) or 0),
+            },
+            "metadata": metadata,
+        }
+    except json.JSONDecodeError as e:
+        print(f"❌ Error parseando config.json: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error leyendo config.json: {e}")
+        return None
     except Exception as e:
         print(f"❌ Error leyendo JSON: {e}")
         return None
@@ -181,13 +231,20 @@ def import_item_from_folder(
         Dict con el item creado o None si falla
     """
     json_path = item_folder / "item.json"
-    
-    if not json_path.exists():
-        print(f"⚠️ No se encontró item.json en {item_folder.name}")
+    config_path = item_folder / "config.json"
+
+    data: Optional[Dict[str, Any]] = None
+    if json_path.exists():
+        data = _load_item_json(json_path)
+    elif source == "store" and config_path.exists():
+        data = _load_store_config_json(config_path)
+        if data is None:
+            print(f"  ⏭️ Omitido (store no-card o config inválido): {item_folder.name}")
+            return None
+    else:
+        print(f"⚠️ No se encontró item.json/config.json en {item_folder.name}")
         return None
-    
-    # Cargar JSON
-    data = _load_item_json(json_path)
+
     if not data:
         return None
     
@@ -406,7 +463,8 @@ def import_store_items() -> Dict[str, any]:
     results = {
         "total": 0,
         "successful": 0,
-        "failed": 0
+        "failed": 0,
+        "ignored": 0,
     }
     
     print("\n" + "=" * 60)
@@ -427,6 +485,14 @@ def import_store_items() -> Dict[str, any]:
     print("-" * 60)
     
     for item_folder in item_folders:
+        config_path = item_folder / "config.json"
+        if config_path.exists():
+            cfg = _load_store_config_json(config_path)
+            if cfg is None:
+                results["ignored"] += 1
+                print(f"  ⏭️ Ignorado (no card): {item_folder.name}")
+                continue
+
         results["total"] += 1
         print(f"  🏪 {item_folder.name}")
         
@@ -443,6 +509,7 @@ def import_store_items() -> Dict[str, any]:
     print(f"Total procesados: {results['total']}")
     print(f"Exitosos: {results['successful']}")
     print(f"Fallidos: {results['failed']}")
+    print(f"Ignorados (no-card): {results['ignored']}")
     
     return results
 
@@ -484,8 +551,10 @@ def sync_existing_items() -> Dict[str, any]:
     """
     Sincroniza catálogo tomando assets como fuente de verdad, sin crear nuevos.
 
-    - Si el item_key existe en DB: actualiza cambios (incluyendo imagen) usando import_item_from_folder.
-    - Si el item_key NO existe en DB: lo omite (no crea nuevos).
+        - Si el item_key existe en DB: actualiza cambios (incluyendo imagen) usando import_item_from_folder.
+        - Si el item_key NO existe en DB:
+            - gacha: lo omite (no crea nuevos).
+            - store card: lo crea para que quede disponible en catálogo/inventario.
     - Si un item existe en DB pero YA NO existe en assets: lo elimina de DB.
 
     Returns:
@@ -531,15 +600,24 @@ def sync_existing_items() -> Dict[str, any]:
             conn.close()
 
     def _sync_folder(item_folder: Path, source: Literal["gacha", "store"]) -> None:
-        results["processed"] += 1
         json_path = item_folder / "item.json"
+        config_path = item_folder / "config.json"
 
-        if not json_path.exists():
-            print(f"  ⚠️ Omitido (sin item.json): {source}/{item_folder.name}")
+        data: Optional[Dict[str, Any]] = None
+        if json_path.exists():
+            data = _load_item_json(json_path)
+        elif source == "store" and config_path.exists():
+            data = _load_store_config_json(config_path)
+            if data is None:
+                print(f"  ⏭️ Omitido (store no-card): {source}/{item_folder.name}")
+                return
+        else:
+            print(f"  ⚠️ Omitido (sin item.json/config.json): {source}/{item_folder.name}")
             results["failed"] += 1
             return
 
-        data = _load_item_json(json_path)
+        results["processed"] += 1
+
         if not data:
             print(f"  ❌ Omitido (JSON inválido): {source}/{item_folder.name}")
             results["failed"] += 1
@@ -554,6 +632,16 @@ def sync_existing_items() -> Dict[str, any]:
         asset_item_keys.add(item_key)
 
         if not _db_has_item(item_key):
+            if source == "store":
+                created = import_item_from_folder(item_folder, source)
+                if created:
+                    print(f"  ✅ Creado (store card nuevo): {item_key}")
+                    results["updated_or_kept"] += 1
+                    results["by_source"][source] += 1
+                else:
+                    results["failed"] += 1
+                return
+
             print(f"  ⏭️ Omitido (nuevo no creado): {item_key}")
             results["skipped_new"] += 1
             return
@@ -943,10 +1031,14 @@ def validate_item_structure() -> Dict[str, List[str]]:
                 continue
             
             json_path = item_folder / "item.json"
+            config_path = item_folder / "config.json"
+
             if json_path.exists():
                 valid.append(f"store/{item_folder.name}")
+            elif config_path.exists() and _load_store_config_json(config_path) is not None:
+                valid.append(f"store/{item_folder.name}")
             else:
-                invalid.append(f"store/{item_folder.name} (sin item.json)")
+                invalid.append(f"store/{item_folder.name} (sin item válido de card)")
     
     return {
         "valid": valid,

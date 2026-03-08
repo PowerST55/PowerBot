@@ -332,7 +332,7 @@ function showWinner() {
             
             // Esperar animación de salida (1.6s) + 4s de delay fuera de pantalla = 5.6s
             setTimeout(() => {
-                window.location.href = "index.html";
+                window.location.href = "main.html";
             }, 5600);
         }, 7000);  // 7 segundos para mostrar ganador
     } else {
@@ -368,8 +368,8 @@ function toggleMiniMode(isMini) {
 }
 
 socket.onclose = () => {
-    console.warn("WebSocket cerrado, redirigiendo a index.html...");
-    window.location.href = "index.html";
+    console.warn("WebSocket cerrado, redirigiendo a main.html...");
+    window.location.href = "main.html";
 };
     </script>
 

@@ -123,6 +123,7 @@ async def cmd_colortest(ctx: CommandContext) -> None:
 async def cmd_help(ctx: CommandContext) -> None:
 	"""Comando help - muestra los comandos disponibles"""
 	ctx.print("Comandos disponibles:")
+	ctx.print("  status         - Muestra estado ON/OFF de servicios principales")
 	ctx.print("  test           - Comando de prueba que imprime 'Hola mundo'")
 	ctx.print("  colortest      - Prueba todos los colores disponibles")
 	ctx.print("  clean          - Limpia la consola")
@@ -143,6 +144,13 @@ async def cmd_help(ctx: CommandContext) -> None:
 	ctx.print("                   • livefeed status - Ver solicitud pendiente")
 	ctx.print("                   • livefeed allow  - Autorizar última solicitud")
 	ctx.print("                   • livefeed deny   - Rechazar última solicitud")
+	ctx.print("  ruleta          - Inicia ruleta y redirige a ruleta.html")
+	ctx.print("  rgirar          - Gira la ruleta activa")
+	ctx.print("  reend           - Finaliza ruleta y vuelve a main.html")
+	ctx.print("  ragg <id>       - Agrega usuario por ID universal a la ruleta")
+	ctx.print("  index           - Redirige livefeed a main.html")
+	ctx.print("  ntf <subcmd>    - Pruebas de notificaciones livefeed")
+	ctx.print("                   • ntf store <id> - Simula compra store sound (ej: s1)")
 	ctx.print("  wsocket <subcmd>- Control del servidor websocket local")
 	ctx.print("                   • wsocket        - Alterna ON/OFF")
 	ctx.print("                   • wsocket autorun- Alterna arranque automático")
@@ -185,6 +193,39 @@ async def cmd_clean(ctx: CommandContext) -> None:
 	# Limpiar la consola usando el método nativo del SO
 	os.system('cls' if os.name == 'nt' else 'clear')
 	ctx.print("Consola limpiada")
+
+
+def _on_off_label(is_on: bool) -> str:
+	"""Etiqueta coloreada ON/OFF para salida de consola."""
+	return "[success]ON[/success]" if is_on else "[error]OFF[/error]"
+
+
+async def cmd_status(ctx: CommandContext) -> None:
+	"""Comando status - muestra estado de servicios principales."""
+	from .web import general as web_general
+	from .store import general as store_general
+	from .websocket import general as wsocket_general
+	from .discord_bot import general as discord_general
+	from .backup import general as backup_general
+	from .youtube import general as youtube_general
+	from backend.services.events_websocket import general as ws_events_general
+
+	web_on = bool(web_general._is_web_running())
+	store_on = bool(store_general._is_store_running())
+	ws_process_on = bool(wsocket_general.is_websocket_running())
+	ws_endpoint_on = bool(ws_events_general.is_ws_endpoint_available())
+	discord_on = bool(discord_general._is_discord_running())
+	backup_on = bool(backup_general._is_backup_running())
+	yapi_on = bool(youtube_general._is_yapi_active())
+
+	ctx.print("Estado de servicios:")
+	ctx.print(f"  • Web: {_on_off_label(web_on)}")
+	ctx.print(f"  • Store: {_on_off_label(store_on)}")
+	ctx.print(f"  • WebSocket Proceso: {_on_off_label(ws_process_on)}")
+	ctx.print(f"  • WebSocket Endpoint: {_on_off_label(ws_endpoint_on)}")
+	ctx.print(f"  • Discord: {_on_off_label(discord_on)}")
+	ctx.print(f"  • Backup: {_on_off_label(backup_on)}")
+	ctx.print(f"  • YouTube (YAPI): {_on_off_label(yapi_on)}")
 
 
 async def cmd_restart(ctx: CommandContext) -> None:
@@ -282,6 +323,42 @@ async def cmd_livefeed(ctx: CommandContext) -> None:
 	await cmd_livefeed_impl(ctx)
 
 
+async def cmd_ruleta(ctx: CommandContext) -> None:
+	"""Comando ruleta - inicia ruleta y redirige livefeed a ruleta.html."""
+	from .livefeed.spinwheel import run_spinwheel_console_action
+	await run_spinwheel_console_action("ruleta", ctx)
+
+
+async def cmd_rgirar(ctx: CommandContext) -> None:
+	"""Comando rgirar - gira la ruleta activa."""
+	from .livefeed.spinwheel import run_spinwheel_console_action
+	await run_spinwheel_console_action("rgirar", ctx)
+
+
+async def cmd_reend(ctx: CommandContext) -> None:
+	"""Comando reend - finaliza ruleta y vuelve a main.html."""
+	from .livefeed.spinwheel import run_spinwheel_console_action
+	await run_spinwheel_console_action("reend", ctx)
+
+
+async def cmd_ragg(ctx: CommandContext) -> None:
+	"""Comando ragg - agrega usuario por ID universal a la ruleta."""
+	from .livefeed.spinwheel import run_spinwheel_console_action
+	await run_spinwheel_console_action("ragg", ctx)
+
+
+async def cmd_index(ctx: CommandContext) -> None:
+	"""Comando index - redirige livefeed a main.html."""
+	from .livefeed.index import cmd_index as cmd_index_impl
+	await cmd_index_impl(ctx)
+
+
+async def cmd_ntf(ctx: CommandContext) -> None:
+	"""Comando ntf - pruebas de notificaciones livefeed."""
+	from .livefeed.notifications import cmd_ntf as cmd_ntf_impl
+	await cmd_ntf_impl(ctx)
+
+
 async def cmd_say(ctx: CommandContext) -> None:
 	"""Comando say - envia un mensaje a YouTube Live."""
 	from .youtube.general import _get_listener, _get_youtube
@@ -318,6 +395,7 @@ async def cmd_say(ctx: CommandContext) -> None:
 
 # Registro de comandos con alias
 _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
+	"status": cmd_status,
 	"test": cmd_test,
 	"colortest": cmd_colortest,
 	"clean": cmd_clean,
@@ -331,6 +409,12 @@ _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
 	"discord": cmd_discord,
 	"backup": cmd_backup,
 	"livefeed": cmd_livefeed,
+	"ruleta": cmd_ruleta,
+	"rgirar": cmd_rgirar,
+	"reend": cmd_reend,
+	"ragg": cmd_ragg,
+	"index": cmd_index,
+	"ntf": cmd_ntf,
 	"wsocket": cmd_wsocket,
 	"help": cmd_help,
 	"exit": cmd_exit,
@@ -338,12 +422,14 @@ _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
 
 # Definir alias para comandos
 _COMMAND_ALIASES = {
+	"st": "status",
 	"rst": "restart",
 	"cls": "clean",
 	"clear": "clean",
 	"limpiar": "clean",
 	"e": "exit",
 	"salir": "exit",
+	"rend": "reend",
 }
 
 # Construir el dict COMMANDS con comandos y alias

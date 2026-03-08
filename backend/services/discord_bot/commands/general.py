@@ -11,6 +11,7 @@ from backend.managers.user_lookup_manager import find_user_by_discord_id, find_u
 from backend.managers.economy_manager import get_user_balance_by_id
 from backend.managers import inventory_manager
 from backend.services.discord_bot.commands.economy.user_economy import send_donation_embed
+from backend.services.discord_bot.config.roles import get_roles_config
 
 
 def setup_general_commands(bot: commands.Bot) -> None:
@@ -37,6 +38,111 @@ def setup_general_commands(bot: commands.Bot) -> None:
 		await interaction.followup.send(embed=result_embed, ephemeral=True)
 
 	bot.tree.add_command(crear_group)
+
+	@bot.tree.command(
+		name="stream",
+		description="Solicita por MD que el/los streamer(s) inicien stream"
+	)
+	@app_commands.describe(
+		tematica="Temática opcional del stream (ej: roblox)"
+	)
+	async def stream_command(
+		interaction: discord.Interaction,
+		tematica: Optional[str] = None,
+	):
+		"""Envía un DM al usuario (o usuarios) con rol streamer configurado."""
+		if interaction.guild is None:
+			embed = discord.Embed(
+				title="❌ Comando no disponible",
+				description="Este comando solo se puede usar dentro de un servidor.",
+				color=discord.Color.red(),
+			)
+			await interaction.response.send_message(embed=embed, ephemeral=True)
+			return
+
+		roles_config = get_roles_config(interaction.guild.id)
+		streamer_role_id = roles_config.get_role("streamer")
+		if not streamer_role_id:
+			embed = discord.Embed(
+				title="⚠ Rol streamer no configurado",
+				description="Primero configura el rol con `/set role streamer @rol`.",
+				color=discord.Color.orange(),
+			)
+			await interaction.response.send_message(embed=embed, ephemeral=True)
+			return
+
+		streamer_role = interaction.guild.get_role(int(streamer_role_id))
+		if streamer_role is None:
+			embed = discord.Embed(
+				title="❌ Rol streamer inválido",
+				description="El rol streamer guardado no existe en este servidor. Configúralo de nuevo con `/set role streamer @rol`.",
+				color=discord.Color.red(),
+			)
+			await interaction.response.send_message(embed=embed, ephemeral=True)
+			return
+
+		streamer_members = [member for member in streamer_role.members if not member.bot]
+		if not streamer_members:
+			embed = discord.Embed(
+				title="⚠ No hay streamers disponibles",
+				description=f"No encontré usuarios con el rol {streamer_role.mention}.",
+				color=discord.Color.orange(),
+			)
+			await interaction.response.send_message(embed=embed, ephemeral=True)
+			return
+
+		requester_mention = interaction.user.mention
+		tematica_clean = str(tematica or "").strip()
+		if tematica_clean:
+			description = (
+				f"{requester_mention} está solicitando que inicies un stream de la temática `{tematica_clean}`."
+			)
+		else:
+			description = f"{requester_mention} te está pidiendo que inicies un stream."
+
+		dm_embed = discord.Embed(
+			title="📣 Solicitud de stream",
+			description=description,
+			color=discord.Color.blurple(),
+		)
+		dm_embed.add_field(name="Servidor", value=interaction.guild.name, inline=False)
+		dm_embed.set_footer(text="PowerBot")
+
+		sent_to: list[str] = []
+		failed_to: list[str] = []
+
+		for member in streamer_members:
+			try:
+				await member.send(embed=dm_embed)
+				sent_to.append(member.mention)
+			except discord.Forbidden:
+				failed_to.append(member.mention)
+			except Exception:
+				failed_to.append(member.mention)
+
+		if sent_to:
+			confirm = discord.Embed(
+				title="✅ Solicitud enviada",
+				description="Se envió la solicitud de stream por MD.",
+				color=discord.Color.green(),
+			)
+			confirm.add_field(name="Enviado a", value="\n".join(sent_to), inline=False)
+			if failed_to:
+				confirm.add_field(
+					name="No se pudo enviar a",
+					value="\n".join(failed_to),
+					inline=False,
+				)
+			await interaction.response.send_message(embed=confirm, ephemeral=True)
+			return
+
+		error_embed = discord.Embed(
+			title="❌ No se pudo enviar la solicitud",
+			description="Ningún streamer acepta MDs o hubo un error al enviar.",
+			color=discord.Color.red(),
+		)
+		error_embed.add_field(name="Usuarios", value="\n".join(failed_to), inline=False)
+		await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
 	@bot.tree.command(
 		name="id",

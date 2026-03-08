@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Notificaciones Automáticas</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="css/notifications.css">
     <link rel="stylesheet" href="css/video-notifications.css">
     <link rel="stylesheet" href="css/codes.css">
@@ -32,17 +33,34 @@
 
     <div id="notifications-root"></div>
     <div id="video-container">
-        <video id="notification-video" playsinline autoplay></video>
+        <video id="notification-video" playsinline autoplay muted></video>
     </div>
     <div id="code-display"></div>
 
     <script>
         const notificationsContainer = [];
         const maxNotifications = 4;
-        const storePath = 'store';
+        let storePath = '';
+        const storePathCandidates = [
+            '/assets/store',
+            'assets/store',
+            '/store',
+            'store',
+            '/fronted/assets/store'
+        ];
         const notificationCatalog = {}; // Almacenar configuraciones cargadas
+        const catalogLoadPromises = {}; // Evitar doble carga simultanea por ID
+        const mediaPathCache = {
+            video: {},
+            audio: {}
+        };
         const notificationQueue = []; // Cola de notificaciones pendientes
         let isPlayingNotification = false; // Flag para saber si se está reproduciendo una notificación
+        const defaultNotificationSound = 'sounds/notification/notification.wav';
+        const audioWarmupState = {
+            readyPromise: null,
+            currentSrc: null
+        };
         
         // --- VARIABLES PARA CÓDIGOS ---
         let activeCode = null;
@@ -63,42 +81,338 @@
             return root;
         }
 
-        // Cargar el catálogo dinámicamente desde store/
+        function uniqueArray(values) {
+            return [...new Set(values.filter(Boolean))];
+        }
+
+        function normalizeStoreBasePath(path) {
+            if (!path) return '';
+            const normalized = normalizePath(path).replace(/\/+$/, '');
+            if (!normalized) return '';
+            if (/^(https?:)?\/\//i.test(normalized)) return normalized;
+            if (normalized.startsWith('/')) return normalized;
+            return `/${normalized}`;
+        }
+
+        function getStoreBaseCandidates() {
+            const params = new URLSearchParams(window.location.search);
+            const fromParams = [
+                params.get('store'),
+                params.get('storepath'),
+                params.get('storePath')
+            ].map(normalizeStoreBasePath);
+
+            const fromDefaults = storePathCandidates.map(normalizeStoreBasePath);
+            const preferred = normalizeStoreBasePath(storePath);
+            const candidates = uniqueArray([preferred, ...fromParams, ...fromDefaults]);
+            return candidates;
+        }
+
+        function shouldPreloadCatalog() {
+            const params = new URLSearchParams(window.location.search);
+            const preloadFlag = (params.get('preloadStore') || params.get('catalog') || '').toLowerCase();
+            return preloadFlag === '1' || preloadFlag === 'true' || preloadFlag === 'yes';
+        }
+
+        function normalizePath(path) {
+            if (!path) return '';
+            return String(path).replace(/\\/g, '/').trim();
+        }
+
+        function isAbsoluteMediaUrl(path) {
+            return /^(https?:)?\/\//i.test(path) || path.startsWith('/');
+        }
+
+        function toMediaUrl(path, notifId, basePath) {
+            const normalized = normalizePath(path);
+            if (!normalized) return '';
+            if (isAbsoluteMediaUrl(normalized)) return normalized;
+            if (notifId) {
+                const base = normalizeStoreBasePath(basePath || storePath || getStoreBaseCandidates()[0]);
+                if (!base) return '';
+                return `${base}/${notifId}/${normalized}`;
+            }
+            return normalized;
+        }
+
+        async function checkMediaExists(path) {
+            if (!path) return false;
+            try {
+                const headResponse = await fetch(path, { method: 'HEAD', cache: 'no-store' });
+                if (headResponse.ok) {
+                    return true;
+                }
+
+                // Algunos servidores estaticos no soportan HEAD para archivos.
+                if (headResponse.status === 405 || headResponse.status === 501) {
+                    const getResponse = await fetch(path, { method: 'GET', cache: 'no-store' });
+                    if (getResponse.ok) {
+                        if (getResponse.body) {
+                            getResponse.body.cancel().catch(() => {});
+                        }
+                        return true;
+                    }
+                }
+            } catch (error) {
+                console.warn(`⚠ No se pudo verificar media: ${path}`, error);
+            }
+            return false;
+        }
+
+        async function findFirstExistingMedia(candidates) {
+            for (const path of candidates) {
+                if (await checkMediaExists(path)) {
+                    return path;
+                }
+            }
+            return '';
+        }
+
+        function buildMediaCandidates(notifId, fileFromConfig, defaultNames = []) {
+            const candidates = [];
+            const pushCandidate = (value) => {
+                const normalizedValue = normalizePath(value);
+                if (!normalizedValue) return;
+
+                if (isAbsoluteMediaUrl(normalizedValue)) {
+                    if (!candidates.includes(normalizedValue)) {
+                        candidates.push(normalizedValue);
+                    }
+                    return;
+                }
+
+                if (!notifId) return;
+                for (const baseCandidate of getStoreBaseCandidates()) {
+                    const resolved = toMediaUrl(normalizedValue, notifId, baseCandidate);
+                    if (resolved && !candidates.includes(resolved)) {
+                        candidates.push(resolved);
+                    }
+                }
+            };
+
+            pushCandidate(fileFromConfig);
+            for (const name of defaultNames) {
+                pushCandidate(name);
+            }
+            return candidates;
+        }
+
+        async function resolveVideoPath(notifId, config = {}, data = {}) {
+            if (data.videoPath || data.video) {
+                return toMediaUrl(data.videoPath || data.video, notifId);
+            }
+
+            if (mediaPathCache.video[notifId]) {
+                return mediaPathCache.video[notifId];
+            }
+
+            const candidates = buildMediaCandidates(notifId, config.video, ['video.mp4', 'video.webm', 'video.mov']);
+            const foundPath = await findFirstExistingMedia(candidates);
+            mediaPathCache.video[notifId] = foundPath;
+            return foundPath;
+        }
+
+        async function resolveAudioPath(notifId, config = {}, data = {}) {
+            if (data.audioPath || data.audio) {
+                return toMediaUrl(data.audioPath || data.audio, notifId);
+            }
+
+            if (mediaPathCache.audio[notifId]) {
+                return mediaPathCache.audio[notifId];
+            }
+
+            const candidates = buildMediaCandidates(notifId, config.audio, ['audio.mp3', 'audio.wav', 'audio.ogg', defaultNotificationSound]);
+            const foundPath = await findFirstExistingMedia(candidates);
+            mediaPathCache.audio[notifId] = foundPath || defaultNotificationSound;
+            return mediaPathCache.audio[notifId];
+        }
+
+        async function waitForAudioCanPlayThrough(audioElement, timeoutMs = 5000) {
+            if (audioElement.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+                return;
+            }
+
+            await new Promise((resolve) => {
+                let settled = false;
+                const timeoutId = setTimeout(() => {
+                    if (!settled) {
+                        settled = true;
+                        cleanup();
+                        console.warn('⚠ Tiempo de espera agotado al cargar audio completo. Se intentara reproducir igualmente.');
+                        resolve();
+                    }
+                }, timeoutMs);
+
+                const onCanPlayThrough = () => {
+                    if (!settled) {
+                        settled = true;
+                        cleanup();
+                        resolve();
+                    }
+                };
+
+                const onError = () => {
+                    if (!settled) {
+                        settled = true;
+                        cleanup();
+                        console.warn('⚠ Error al precargar audio completo.');
+                        resolve();
+                    }
+                };
+
+                const cleanup = () => {
+                    clearTimeout(timeoutId);
+                    audioElement.removeEventListener('canplaythrough', onCanPlayThrough);
+                    audioElement.removeEventListener('error', onError);
+                };
+
+                audioElement.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
+                audioElement.addEventListener('error', onError, { once: true });
+                audioElement.load();
+            });
+        }
+
+        async function primeNotificationAudio(src) {
+            const audioElement = document.getElementById('notification-sound');
+            if (!audioElement) return;
+
+            const finalSrc = src || defaultNotificationSound;
+            if (audioWarmupState.currentSrc !== finalSrc) {
+                audioWarmupState.currentSrc = finalSrc;
+                audioElement.src = finalSrc;
+                audioWarmupState.readyPromise = null;
+            }
+
+            if (!audioWarmupState.readyPromise) {
+                audioWarmupState.readyPromise = waitForAudioCanPlayThrough(audioElement);
+            }
+
+            await audioWarmupState.readyPromise;
+        }
+
+        async function playNotificationSound(notifId, config = {}, data = {}) {
+            const audioElement = document.getElementById('notification-sound');
+            if (!audioElement) return;
+
+            const audioPath = await resolveAudioPath(notifId, config, data);
+            await primeNotificationAudio(audioPath);
+
+            try {
+                audioElement.currentTime = 0;
+                await audioElement.play();
+            } catch (error) {
+                console.warn('⚠ No se pudo reproducir el sonido de notificacion:', error);
+            }
+        }
+
+        async function fetchManifestNotificationIds() {
+            for (const basePath of getStoreBaseCandidates()) {
+                try {
+                    const response = await fetch(`${basePath}/manifest.json`, { cache: 'no-store' });
+                    if (!response.ok) {
+                        continue;
+                    }
+
+                    const manifest = await response.json();
+                    if (Array.isArray(manifest.notifications)) {
+                        storePath = basePath;
+                        return manifest.notifications;
+                    }
+                } catch (error) {
+                    // Intentar siguiente ruta candidata.
+                }
+            }
+            return [];
+        }
+
+        async function fetchStoreIdsFromDirectoryListing() {
+            for (const basePath of getStoreBaseCandidates()) {
+                try {
+                    const response = await fetch(`${basePath}/`, { cache: 'no-store' });
+                    if (!response.ok) {
+                        continue;
+                    }
+
+                    const html = await response.text();
+                    const matches = [...html.matchAll(/href=["']([^"']+)["']/gi)];
+                    const ids = [];
+
+                    for (const match of matches) {
+                        const href = normalizePath(match[1]);
+                        if (!href || href.startsWith('?') || href.startsWith('#')) continue;
+                        if (href.includes('..')) continue;
+                        const clean = href.replace(/^\//, '').replace(/\/$/, '');
+                        if (!clean || clean.includes('.')) continue;
+                        if (!ids.includes(clean)) {
+                            ids.push(clean);
+                        }
+                    }
+
+                    if (ids.length > 0) {
+                        storePath = basePath;
+                        return ids;
+                    }
+                } catch (error) {
+                    // Intentar siguiente ruta candidata.
+                }
+            }
+            return [];
+        }
+
+        async function loadNotificationConfig(notificationId) {
+            if (!notificationId) return null;
+            if (notificationCatalog[notificationId]) return notificationCatalog[notificationId];
+            if (catalogLoadPromises[notificationId]) return catalogLoadPromises[notificationId];
+
+            catalogLoadPromises[notificationId] = (async () => {
+                try {
+                    for (const basePath of getStoreBaseCandidates()) {
+                        try {
+                            const configResponse = await fetch(`${basePath}/${notificationId}/config.json`, { cache: 'no-store' });
+                            if (!configResponse.ok) {
+                                continue;
+                            }
+
+                            const config = await configResponse.json();
+                            storePath = basePath;
+                            notificationCatalog[notificationId] = {
+                                ...config,
+                                item_key: config.item_key || notificationId
+                            };
+                            console.log(`  ✓ ${notificationId} cargado desde ${basePath}`);
+                            return notificationCatalog[notificationId];
+                        } catch (error) {
+                            // Intentar siguiente ruta candidata.
+                        }
+                    }
+
+                    console.warn(`⚠ config.json no encontrado para: ${notificationId} en rutas candidatas`, getStoreBaseCandidates());
+                    return null;
+                } finally {
+                    delete catalogLoadPromises[notificationId];
+                }
+            })();
+
+            return catalogLoadPromises[notificationId];
+        }
+
+        // Cargar el catalogo dinamicamente desde store/ con varios fallbacks
         async function loadNotificationCatalog() {
             try {
                 console.log('🔄 Iniciando carga del catálogo...');
-                const response = await fetch(`${storePath}/manifest.json`);
-                if (!response.ok) {
-                    console.error('❌ manifest.json no encontrado. Status:', response.status);
-                    console.error('   Crea un archivo store/manifest.json con: {"version": "1.0", "notifications": ["hijodelamaraca"]}');
-                    return;
+
+                const manifestIds = await fetchManifestNotificationIds();
+                const listingIds = await fetchStoreIdsFromDirectoryListing();
+                const discoveredIds = [...new Set([...manifestIds, ...listingIds])];
+
+                if (discoveredIds.length === 0) {
+                    console.warn('⚠ No se encontraron IDs en manifest ni por listado. Se cargaran bajo demanda por WebSocket.');
+                    console.warn('   Si conoces la ruta exacta, pasa ?store=/assets/store (o la que corresponda).');
                 }
 
-                const manifest = await response.json();
-                console.log('📋 Manifest cargado:', manifest);
-
-                if (!manifest.notifications || manifest.notifications.length === 0) {
-                    console.warn('⚠ El manifest no contiene notificaciones');
-                    return;
-                }
-
-                for (const notificationId of manifest.notifications) {
-                    try {
-                        console.log(`  📦 Cargando: ${notificationId}...`);
-                        const configResponse = await fetch(`${storePath}/${notificationId}/config.json`);
-                        if (configResponse.ok) {
-                            const config = await configResponse.json();
-                            notificationCatalog[notificationId] = {
-                                ...config,
-                                videoPath: `${storePath}/${notificationId}/video.mp4`
-                            };
-                            console.log(`  ✓ ${notificationId} cargado`);
-                        } else {
-                            console.error(`  ❌ config.json no encontrado para: ${notificationId} (Status: ${configResponse.status})`);
-                        }
-                    } catch (error) {
-                        console.error(`  ❌ Error cargando ${notificationId}:`, error);
-                    }
+                for (const notificationId of discoveredIds) {
+                    console.log(`  📦 Cargando: ${notificationId}...`);
+                    await loadNotificationConfig(notificationId);
                 }
 
                 console.log('🎬 Catálogo completo:', notificationCatalog);
@@ -109,10 +423,10 @@
         }
 
         // Reproducir video de notificación
-        async function playNotificationVideo(notifId) {
+        async function playNotificationVideo(notifId, config = {}, data = {}) {
             try {
-                const config = notificationCatalog[notifId];
-                if (!config || !config.videoPath) {
+                const videoPath = await resolveVideoPath(notifId, config, data);
+                if (!videoPath) {
                     console.warn(`❌ Video no encontrado para: ${notifId}`);
                     return 0;
                 }
@@ -120,41 +434,80 @@
                 const videoElement = document.getElementById('notification-video');
                 const videoContainer = document.getElementById('video-container');
 
-                videoElement.src = config.videoPath;
+                videoElement.src = videoPath;
+                // Reproducción resiliente: autoplay sin interacción solo es estable en mute.
+                videoElement.muted = true;
+                videoElement.defaultMuted = true;
                 videoContainer.classList.remove('hide'); // Remover clase hide si existe
                 videoContainer.style.display = 'block';
 
                 // Esperar a que el video cargue para obtener la duración
                 return new Promise((resolve) => {
+                    let settled = false;
+                    let fallbackTimeoutId = null;
+
+                    const cleanupCommon = () => {
+                        if (fallbackTimeoutId) {
+                            clearTimeout(fallbackTimeoutId);
+                            fallbackTimeoutId = null;
+                        }
+                        videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
+                        videoElement.removeEventListener('ended', handleEnded);
+                        videoElement.removeEventListener('error', handleError);
+                    };
+
+                    const settle = (value) => {
+                        if (settled) return;
+                        settled = true;
+                        cleanupCommon();
+                        resolve(value);
+                    };
+
                     const handleLoadedMetadata = () => {
                         const duration = videoElement.duration * 1000; // convertir a ms
                         console.log(`▶ Reproduciendo video: ${notifId} (${(duration/1000).toFixed(2)}s)`);
-                        videoElement.play().catch(err => console.warn('Error reproduciendo video:', err));
 
-                        // Ocultar video cuando termine
-                        const handleEnded = () => {
+                        // Fallback si el evento ended no llega (corrupción de media o bloqueo del navegador).
+                        const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 4200;
+                        fallbackTimeoutId = setTimeout(() => {
+                            console.warn(`⚠ Timeout de reproducción para ${notifId}. Cerrando notificación para evitar bloqueo.`);
                             videoContainer.classList.add('hide');
                             setTimeout(() => {
                                 videoContainer.style.display = 'none';
                             }, 300);
-                            videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
-                            videoElement.removeEventListener('ended', handleEnded);
-                            resolve(duration);
-                        };
+                            settle(safeDuration);
+                        }, safeDuration + 800);
+
+                        videoElement.play().catch((err) => {
+                            console.warn('Error reproduciendo video:', err);
+                            videoContainer.classList.add('hide');
+                            setTimeout(() => {
+                                videoContainer.style.display = 'none';
+                            }, 300);
+                            settle(0);
+                        });
 
                         videoElement.addEventListener('ended', handleEnded);
                     };
 
-                    const handleError = () => {
-                        console.error(`❌ Error cargando video: ${config.videoPath}`);
-                        console.error('   Verifica que el archivo video.mp4 existe en la carpeta');
+                    // Ocultar video cuando termine
+                    const handleEnded = () => {
+                        const duration = videoElement.duration * 1000;
                         videoContainer.classList.add('hide');
                         setTimeout(() => {
                             videoContainer.style.display = 'none';
                         }, 300);
-                        videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
-                        videoElement.removeEventListener('error', handleError);
-                        resolve(0);
+                        settle(Number.isFinite(duration) && duration > 0 ? duration : 4200);
+                    };
+
+                    const handleError = () => {
+                        console.error(`❌ Error cargando video: ${videoPath}`);
+                        console.error('   Verifica que el video exista en la carpeta del item o llegue por WebSocket.');
+                        videoContainer.classList.add('hide');
+                        setTimeout(() => {
+                            videoContainer.style.display = 'none';
+                        }, 300);
+                        settle(0);
                     };
 
                     videoElement.addEventListener('loadedmetadata', handleLoadedMetadata);
@@ -218,30 +571,38 @@
         }
 
         async function nuevaNotificacion(notifId, data = {}) {
-            const config = notificationCatalog[notifId];
-            if (!config) {
+            const hasDirectMedia = Boolean(data.videoPath || data.video || data.audioPath || data.audio);
+            const config = await loadNotificationConfig(notifId);
+            if (!config && !hasDirectMedia) {
                 console.error(`❌ Notificación no encontrada: "${notifId}"`);
                 console.error('   IDs disponibles en catálogo:', Object.keys(notificationCatalog));
                 console.error('   Datos recibidos:', data);
                 console.error('   💡 Asegúrate de que:');
-                console.error('      1. El ID existe en store/manifest.json');
-                console.error('      2. El backend envía el ID correcto (item_id del item de la tienda)');
+                console.error('      1. Exista store/<item_id>/config.json');
+                console.error('      2. El backend envíe el item_id correcto o paths directos por WebSocket');
                 return;
             }
 
-            console.log(`📢 Mostrando notificación: ${notifId}`, 'Config:', config, 'Data:', data);
+            const effectiveConfig = config || {};
+
+            if (!config && hasDirectMedia) {
+                console.warn(`⚠ Config no encontrada para ${notifId}. Se reproducirá usando media directa del payload.`);
+            }
+
+            console.log(`📢 Mostrando notificación: ${notifId}`, 'Config:', effectiveConfig, 'Data:', data);
 
             // Mostrar la notificación PRIMERO (si hay template)
             let notificationElement = null;
-            if (config.template) {
-                const templateId = `template-${config.template}`;
+            const templateName = data.template || effectiveConfig.template;
+            if (templateName) {
+                const templateId = `template-${templateName}`;
                 const template = document.getElementById(templateId);
                 if (template) {
                     notificationElement = template.content.cloneNode(true).querySelector('.notification-box');
 
                     // Priorizar datos dinámicos (data) sobre config
-                    const titleText = data.titleText || config.titleText || '';
-                    const messageText = data.messageText || config.messageText || '';
+                    const titleText = data.titleText || effectiveConfig.titleText || '';
+                    const messageText = data.messageText || effectiveConfig.messageText || '';
                     
                     // Aplicar textos
                     const titleElement = notificationElement.querySelector('.notification-title');
@@ -251,7 +612,7 @@
                     if (messageElement) messageElement.textContent = messageText;
                     
                     // Para style-2, manejar imagen de perfil
-                    if (config.template === 'style2') {
+                    if (templateName === 'style2') {
                         const profileImg = notificationElement.querySelector('.profile-image');
                         if (profileImg && data.profileImage) {
                             profileImg.src = data.profileImage.src || data.profileImage;
@@ -276,11 +637,17 @@
                     console.warn(`⚠ Template no encontrado: ${templateId}`);
                 }
             } else {
-                console.warn(`⚠ No hay template definido en config para: ${notifId}`);
+                // Template opcional: para notificaciones solo de video/audio no se muestra caja.
+            }
+
+            // Permitir pruebas silenciosas (solo video) para tests de store.
+            const skipSound = Boolean(data.skipSound);
+            if (!skipSound) {
+                await playNotificationSound(notifId, effectiveConfig, data);
             }
 
             // Reproducir video (al mismo tiempo que la notificación)
-            const videoDuration = await playNotificationVideo(notifId);
+            const videoDuration = await playNotificationVideo(notifId, effectiveConfig, data);
             
             // Auto-remover la notificación basado en duración del video (o 4200ms por defecto)
             if (notificationElement) {
@@ -549,7 +916,13 @@
 
         // Inicializar al cargar la página
         window.addEventListener('load', () => {
-            loadNotificationCatalog();
+            primeNotificationAudio(defaultNotificationSound).catch(() => {});
+            if (shouldPreloadCatalog()) {
+                loadNotificationCatalog();
+            } else {
+                console.log('ℹ Escaneo de catálogo desactivado por defecto para evitar 404 de rutas estáticas.');
+                console.log('   Usa ?preloadStore=1 para forzar precarga de store.');
+            }
             connectWebSocket();
         });
     </script>

@@ -1,5 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
 
+:root {
+    --wheel-size: min(62vw, 519px);
+    --mini-scale: 0.56;
+}
+
 body {
     font-family: 'Poppins', sans-serif;
     text-align: center;
@@ -71,7 +76,7 @@ body {
     top: 14px;
     right: 22px;
     left: auto;
-    transform: scale(0.45);
+    transform: scale(var(--mini-scale));
     transform-origin: top right;
 }
 
@@ -84,11 +89,11 @@ body {
 
 @keyframes exitMini {
     0% {
-        transform: scale(0.45);
+        transform: scale(var(--mini-scale));
         opacity: 1;
     }
     40% {
-        transform: scale(0.55);
+        transform: scale(calc(var(--mini-scale) + 0.08));
         opacity: 1;
     }
     100% {
@@ -105,26 +110,26 @@ body {
 }
 
 canvas {
-    width: min(62vw, 519px);
-    height: min(62vw, 519px);
+    width: var(--wheel-size);
+    height: var(--wheel-size);
     border-radius: 50%;
     background-color: #fff;
-    border: 5px solid white;
-    box-shadow: 0 0 0 15px #240522;
+    border: 7px solid white;
+    box-shadow: 0 0 0 10px #240522;
     position: relative;
     z-index: 1;
 }
 
 .selector {
     position: absolute;
-    top: -21px;
+    top: calc(var(--wheel-size) * -0.04);
     left: 50%;
     transform: translateX(-50%);
     width: 0;
     height: 0;
-    border-left: 34px solid transparent;
-    border-right: 34px solid transparent;
-    border-top: 44px solid red;
+    border-left: calc(var(--wheel-size) * 0.065) solid transparent;
+    border-right: calc(var(--wheel-size) * 0.065) solid transparent;
+    border-top: calc(var(--wheel-size) * 0.085) solid red;
     z-index: 2;
 }
 
@@ -158,8 +163,8 @@ canvas {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(62vw, 519px);
-    height: min(62vw, 519px);
+    width: var(--wheel-size);
+    height: var(--wheel-size);
     background: linear-gradient(135deg, #0f0f35 0%, #1a0f40 50%, #07071a 100%);
     padding: 34px;
     border-radius: 30px;

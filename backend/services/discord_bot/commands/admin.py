@@ -499,6 +499,7 @@ def setup_admin_commands(bot: commands.Bot):
     @app_commands.choices(tipo=[
         app_commands.Choice(name="DJ", value="dj"),
         app_commands.Choice(name="MOD", value="mod"),
+        app_commands.Choice(name="Streamer", value="streamer"),
         app_commands.Choice(name="Notificaciones", value="notifications"),
     ])
     async def set_role(interaction: discord.Interaction, tipo: app_commands.Choice[str], rol: discord.Role):
@@ -522,10 +523,11 @@ def setup_admin_commands(bot: commands.Bot):
             tipo_nombre = {
                 "dj": "DJ",
                 "mod": "MOD",
+                "streamer": "Streamer",
                 "notifications": "Notificaciones",
             }
             
-            # Manejo diferenciado: DJ (único), MOD (múltiple), notifications (único)
+            # Manejo diferenciado: DJ (único), MOD (múltiple), streamer/notifications (único)
             if tipo.value == "dj":
                 # DJ solo puede tener un rol
                 roles_config.set_role("dj", rol.id)
@@ -570,7 +572,20 @@ def setup_admin_commands(bot: commands.Bot):
                 
                 embed.set_footer(text="Guardado en data/discord_bot/")
 
-            else:  # notifications
+            elif tipo.value == "streamer":
+                roles_config.set_role("streamer", rol.id)
+
+                embed = discord.Embed(
+                    title="✅ Rol streamer configurado",
+                    description="Rol principal del streamer configurado correctamente",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="Tipo", value="`Streamer`", inline=True)
+                embed.add_field(name="Rol", value=rol.mention, inline=True)
+                embed.add_field(name="ID", value=f"`{rol.id}`", inline=True)
+                embed.set_footer(text="Guardado en data/discord_bot/")
+
+            elif tipo.value == "notifications":
                 roles_config.set_role("notifications", rol.id)
 
                 embed = discord.Embed(
@@ -582,6 +597,15 @@ def setup_admin_commands(bot: commands.Bot):
                 embed.add_field(name="Rol", value=rol.mention, inline=True)
                 embed.add_field(name="ID", value=f"`{rol.id}`", inline=True)
                 embed.set_footer(text="Guardado en data/discord_bot/")
+
+            else:
+                embed = discord.Embed(
+                    title="❌ Error",
+                    description="Tipo de rol no reconocido.",
+                    color=discord.Color.red(),
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:

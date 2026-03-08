@@ -11,6 +11,18 @@ from pathlib import Path
 from backend.managers import items_manager
 
 
+def _ensure_items_catalog_up_to_date() -> None:
+    """Sincroniza silenciosamente items desde assets hacia DB/cache.
+
+    Evita que /item y /lista_de_items queden desfasados cuando se agregan
+    nuevas cartas en assets/store.
+    """
+    try:
+        items_manager.sync_existing_items()
+    except Exception as exc:
+        print(f"⚠️ No se pudo sincronizar catálogo de items automáticamente: {exc}")
+
+
 def setup_item_commands(bot: commands.Bot):
     """Registra comandos de items"""
     
@@ -34,6 +46,8 @@ def setup_item_commands(bot: commands.Bot):
         await interaction.response.defer()
         
         try:
+            _ensure_items_catalog_up_to_date()
+
             # Obtener items según el filtro
             if source and source.lower() in ["gacha", "store"]:
                 all_items = items_manager.get_all_items(source=source.lower())
@@ -169,6 +183,8 @@ def setup_item_commands(bot: commands.Bot):
         await interaction.response.defer()
         
         try:
+            _ensure_items_catalog_up_to_date()
+
             # Si no proporciona búsqueda, mostrar selector
             if not id_o_nombre:
                 all_items = items_manager.get_all_items()

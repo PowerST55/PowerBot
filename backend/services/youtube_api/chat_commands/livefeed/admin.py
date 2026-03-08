@@ -53,7 +53,6 @@ async def process_livefeed_admin_command(
 		return False
 
 	if not _is_admin(message):
-		await send_chat_message(client, live_chat_id, f"❌ @{message.author_name} no tienes permisos de administrador para ese comando.")
 		return True
 
 	state = get_spinwheel_state()

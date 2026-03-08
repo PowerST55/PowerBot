@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -77,6 +78,16 @@ def _get_access_urls() -> tuple[str, int, str]:
 	return host, port, ws_url
 
 
+def _is_ws_endpoint_reachable() -> bool:
+	"""Verifica si hay algo escuchando en el endpoint websocket local."""
+	_, port, _ = _get_access_urls()
+	try:
+		with socket.create_connection(("127.0.0.1", int(port)), timeout=0.55):
+			return True
+	except OSError:
+		return False
+
+
 def is_websocket_running() -> bool:
 	global _ws_process
 	return _ws_process is not None and _ws_process.poll() is None
@@ -107,22 +118,15 @@ async def start_websocket_server() -> tuple[bool, str]:
 			[python_executable, "-m", "backend.services.events_websocket.websocket_core"],
 			cwd=str(project_root),
 			env=env,
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.PIPE,
+			# Mantener logs visibles en consola para depuración en vivo.
+			stdout=None,
+			stderr=None,
 			text=True,
 		)
 		await asyncio.sleep(0.8)
 		if _ws_process.poll() is not None:
 			code = _ws_process.returncode
-			error_output = ""
-			if _ws_process.stderr is not None:
-				try:
-					error_output = (_ws_process.stderr.read() or "").strip()
-				except Exception:
-					error_output = ""
 			_ws_process = None
-			if error_output:
-				return False, f"No se pudo iniciar websocket (exit code: {code}): {error_output.splitlines()[-1]}"
 			return False, f"No se pudo iniciar websocket (exit code: {code})"
 
 		return True, "Servidor websocket encendido"
@@ -204,16 +208,20 @@ async def cmd_wsocket(ctx: Any) -> None:
 	if action == "status":
 		status = toggle_manager.get_status()
 		process_state = "ON" if is_websocket_running() else "OFF"
+		endpoint_state = "ON" if _is_ws_endpoint_reachable() else "OFF"
 		persisted_state = "ON" if status.get("enabled") else "OFF"
 		autorun_state = "ON" if autorun_manager.is_enabled() else "OFF"
 		host, port, ws_url = _get_access_urls()
 		ctx.print("Estado WebSocket:")
 		ctx.print(f"  • Proceso: {process_state}")
+		ctx.print(f"  • Endpoint real: {endpoint_state}")
 		ctx.print(f"  • Persistido: {persisted_state}")
 		ctx.print(f"  • Autorun: {autorun_state}")
 		ctx.print(f"  • Bind: {host}:{port}")
 		ctx.print(f"  • Endpoint: {ws_url}")
 		ctx.print(f"  • Config: {status.get('config_file')}")
+		if persisted_state == "ON" and process_state == "OFF" and endpoint_state == "OFF":
+			ctx.warning("Estado persistido desfasado: marca ON pero no hay servidor activo")
 		return
 
 	if action in {"toggle", "switch"}:

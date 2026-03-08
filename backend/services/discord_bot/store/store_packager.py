@@ -18,6 +18,7 @@ from backend.managers import store_manager
 from backend.services.discord_bot.config import get_channels_config
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.config.store import get_store_config
+from backend.services.discord_bot.store.store_sales import process_item_purchase
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,257 @@ class StoreBuyButtonView(discord.ui.View):
 		self.add_item(buy_button)
 
 	async def _on_buy_click(self, interaction: discord.Interaction) -> None:
-		# Placeholder para implementar la compra real más adelante.
-		await interaction.response.send_message(
-			f"La compra de `{self.item_key}` todavía no está implementada.",
-			ephemeral=True,
-		)
+		await process_item_purchase(interaction=interaction, item_key=self.item_key)
 
 
 class DiscordStorePackager:
 	"""Puente entre StoreManager y el foro de tienda en Discord."""
+
+	@staticmethod
+	def _normalize_internal_id(raw: Any) -> Optional[str]:
+		value = str(raw or "").strip().upper()
+		if not value:
+			return None
+		if value.startswith("ID:"):
+			value = value[3:].strip().upper()
+		if value.startswith("S") and value[1:].isdigit():
+			return value
+		if value.isdigit():
+			return f"S{value}"
+		return None
+
+	@staticmethod
+	def _normalize_item_type(item: Dict[str, Any]) -> Optional[str]:
+		metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+		raw = str(metadata.get("tipo") or "").strip().lower()
+		if raw in {"consumable", "consumible"}:
+			return "consumible"
+		if raw in {"static", "estatico", "estático"}:
+			return "estatico"
+		return None
+
+	@staticmethod
+	def _normalize_rarity(rareza: Any) -> Optional[str]:
+		raw = str(rareza or "").strip().lower()
+		if not raw:
+			return None
+		mapping = {
+			"common": "comun",
+			"comun": "comun",
+			"uncommon": "poco comun",
+			"poco comun": "poco comun",
+			"rare": "raro",
+			"raro": "raro",
+			"epic": "epico",
+			"epico": "epico",
+			"legendary": "legendario",
+			"legendario": "legendario",
+		}
+		return mapping.get(raw)
+
+	@staticmethod
+	def _build_item_tag_specs(item: Dict[str, Any]) -> list[tuple[str, Optional[str]]]:
+		try:
+			raw_quantity = item.get("quantity", -1)
+			quantity = int(raw_quantity) if raw_quantity is not None else -1
+		except Exception:
+			quantity = -1
+
+		if quantity == 0:
+			# Cuando no hay unidades, forzar etiqueta única de agotado.
+			return [("agotado", "📦")]
+
+		tag_specs: list[tuple[str, Optional[str]]] = []
+
+		category = DiscordStorePackager._normalize_item_category(item)
+		if category == "sound":
+			tag_specs.append(("sonido", "🎧"))
+		elif category == "card":
+			tag_specs.append(("carta", "⭐"))
+
+		item_type = DiscordStorePackager._normalize_item_type(item)
+		if item_type == "consumible":
+			tag_specs.append(("consumible", "⬆️"))
+		elif item_type == "estatico":
+			tag_specs.append(("estatico", "🧱"))
+
+		rareza_tag = DiscordStorePackager._normalize_rarity(item.get("rareza"))
+		if rareza_tag:
+			tag_specs.append((rareza_tag, None))
+
+		return tag_specs
+
+	@staticmethod
+	async def _ensure_forum_tags(
+		forum_channel: discord.ForumChannel,
+		required_tags: list[tuple[str, Optional[str]]],
+	) -> Dict[str, discord.ForumTag]:
+		existing_by_name: Dict[str, discord.ForumTag] = {
+			tag.name.lower(): tag for tag in forum_channel.available_tags
+		}
+
+		missing: list[tuple[str, Optional[str]]] = []
+		for name, emoji in required_tags:
+			if name.lower() not in existing_by_name:
+				missing.append((name, emoji))
+
+		if missing:
+			updated_tags = list(forum_channel.available_tags)
+			for name, emoji in missing:
+				emoji_obj = discord.PartialEmoji.from_str(emoji) if isinstance(emoji, str) and emoji else None
+				updated_tags.append(discord.ForumTag(name=name, emoji=emoji_obj))
+
+			try:
+				await forum_channel.edit(available_tags=updated_tags, reason="PowerBot store: auto-create forum tags")
+			except Exception as exc:
+				logger.warning(f"No se pudieron crear tags de foro en guild={forum_channel.guild.id}: {exc}")
+
+			try:
+				refreshed = await forum_channel.guild.fetch_channel(forum_channel.id)
+				if isinstance(refreshed, discord.ForumChannel):
+					forum_channel = refreshed
+			except Exception:
+				pass
+
+		# Refrescar vista de tags después de crear (si aplica)
+		return {tag.name.lower(): tag for tag in forum_channel.available_tags}
+
+	@staticmethod
+	def _normalize_item_category(item: Dict[str, Any]) -> str:
+		metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+		raw = str(metadata.get("categoria") or metadata.get("category") or "sound").strip().lower()
+		if raw in {"card", "cards", "carrd"}:
+			return "card"
+		if raw in {"sound", "audio", "sfx"}:
+			return "sound"
+		return "sound"
+
+	@staticmethod
+	def _get_rarity_color(rareza: str) -> discord.Color:
+		color_map = {
+			"common": discord.Color.dark_grey(),
+			"uncommon": discord.Color.purple(),
+			"rare": discord.Color.blue(),
+			"epic": discord.Color.gold(),
+			"legendary": discord.Color.green(),
+		}
+		return color_map.get(str(rareza).lower(), discord.Color.dark_grey())
+
+	@staticmethod
+	def _format_card_stats(item: Dict[str, Any], currency_symbol: str) -> str:
+		stats_parts: list[str] = []
+		if int(item.get("ataque", 0) or 0) > 0:
+			stats_parts.append(f"⚔️ **Ataque:** {int(item.get('ataque', 0) or 0)}")
+		if int(item.get("defensa", 0) or 0) > 0:
+			stats_parts.append(f"🛡️ **Defensa:** {int(item.get('defensa', 0) or 0)}")
+		if int(item.get("vida", 0) or 0) > 0:
+			stats_parts.append(f"❤️ **Vida:** {int(item.get('vida', 0) or 0)}")
+		if int(item.get("armadura", 0) or 0) > 0:
+			stats_parts.append(f"🔗 **Armadura:** {int(item.get('armadura', 0) or 0)}")
+		if int(item.get("mantenimiento", 0) or 0) > 0:
+			symbol_suffix = f" {currency_symbol}" if currency_symbol else ""
+			stats_parts.append(
+				f"🔧 **Mantenimiento:** {int(item.get('mantenimiento', 0) or 0)}{symbol_suffix}"
+			)
+
+		return "\n".join(stats_parts) if stats_parts else "Sin stats"
+
+	@staticmethod
+	def _build_sound_embed(
+		item: Dict[str, Any],
+		currency_symbol: str,
+	) -> discord.Embed:
+		base_price = float(item.get("base_price", 0.0))
+		ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)))
+		raw_quantity = item.get("quantity", -1)
+		quantity = int(raw_quantity) if raw_quantity is not None else -1
+		internal_id = str(item.get("internal_id") or "S?").upper()
+		item_name = str(item.get("nombre", item.get("item_key")))
+		rareza_value = item.get("rareza")
+		has_rareza = isinstance(rareza_value, str) and rareza_value.strip() != ""
+		embed_color = discord.Color.red() if quantity == 0 else (
+			DiscordStorePackager._get_rarity_color(str(rareza_value).lower()) if has_rareza else discord.Color.blurple()
+		)
+
+		embed = discord.Embed(
+			title=f"🎵 `ID:{internal_id}` {item_name}",
+			description=str(item.get("descripcion") or "Sin descripción."),
+			color=embed_color,
+		)
+
+		embed.add_field(name="Tipo", value="sonido", inline=True)
+
+		embed.add_field(
+			name="Precio Base",
+			value=f"{DiscordStorePackager._format_number(base_price)} {currency_symbol}",
+			inline=True,
+		)
+		embed.add_field(name="ip%", value=f"{DiscordStorePackager._format_number(ip_percent)}%", inline=True)
+		embed.add_field(
+			name="Cooldown",
+			value=DiscordStorePackager._format_seconds(item.get("cooldown", 0)),
+			inline=True,
+		)
+		embed.add_field(
+			name="Cooldown Global",
+			value=DiscordStorePackager._format_seconds(item.get("global_cooldown", 0)),
+			inline=True,
+		)
+		stock_text = DiscordStorePackager._stock_text(item)
+		if stock_text is not None:
+			embed.set_footer(text=f"Disponibilidad:\n{stock_text}")
+		if has_rareza:
+			embed.add_field(name="Rareza", value=str(rareza_value).lower(), inline=True)
+		return embed
+
+	@staticmethod
+	def _build_card_embed(
+		item: Dict[str, Any],
+		currency_symbol: str,
+	) -> discord.Embed:
+		rareza = str(item.get("rareza") or "common").lower()
+		raw_quantity = item.get("quantity", -1)
+		quantity = int(raw_quantity) if raw_quantity is not None else -1
+		internal_id = str(item.get("internal_id") or "S?").upper()
+		item_name = str(item.get("nombre", item.get("item_key")))
+
+		base_price = float(item.get("base_price", 0.0))
+		ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)))
+
+		embed = discord.Embed(
+			title=f"🃏 `ID:{internal_id}` {item_name}",
+			description=str(item.get("descripcion") or "Sin descripción."),
+			color=discord.Color.red() if quantity == 0 else DiscordStorePackager._get_rarity_color(rareza),
+		)
+
+		embed.add_field(name="Tipo", value="carta", inline=True)
+		embed.add_field(name="Rareza", value=rareza, inline=True)
+		embed.add_field(
+			name="Precio Base",
+			value=f"{DiscordStorePackager._format_number(base_price)} {currency_symbol}",
+			inline=True,
+		)
+		embed.add_field(name="ip%", value=f"{DiscordStorePackager._format_number(ip_percent)}%", inline=True)
+		embed.add_field(
+			name="Cooldown",
+			value=DiscordStorePackager._format_seconds(item.get("cooldown", 0)),
+			inline=True,
+		)
+		embed.add_field(
+			name="Cooldown Global",
+			value=DiscordStorePackager._format_seconds(item.get("global_cooldown", 0)),
+			inline=True,
+		)
+		stock_text = DiscordStorePackager._stock_text(item)
+		if stock_text is not None:
+			embed.set_footer(text=f"Disponibilidad:\n{stock_text}")
+		embed.add_field(
+			name="⚙️ Stats",
+			value=DiscordStorePackager._format_card_stats(item, currency_symbol=currency_symbol),
+			inline=False,
+		)
+
+		return embed
 
 	@staticmethod
 	def _project_root() -> Path:
@@ -114,43 +357,63 @@ class DiscordStorePackager:
 		return f"{float(value):,.2f}".rstrip("0").rstrip(".")
 
 	@staticmethod
+	def _format_seconds(seconds: Any) -> str:
+		try:
+			total = max(0, int(seconds or 0))
+		except Exception:
+			total = 0
+
+		hours = total // 3600
+		minutes = (total % 3600) // 60
+		secs = total % 60
+		parts: list[str] = []
+		if hours > 0:
+			parts.append(f"{hours}h")
+		if minutes > 0:
+			parts.append(f"{minutes}m")
+		if secs > 0 or not parts:
+			parts.append(f"{secs}s")
+		return " ".join(parts)
+
+	@staticmethod
+	def _stock_text(item: Dict[str, Any]) -> Optional[str]:
+		try:
+			raw_quantity = item.get("quantity", -1)
+			quantity = int(raw_quantity) if raw_quantity is not None else -1
+		except Exception:
+			quantity = -1
+
+		if quantity < 0:
+			return None
+		if quantity == 0:
+			return "Agotado"
+		if quantity == 1:
+			return "1 unidad"
+		return f"{quantity} unidades"
+
+	@staticmethod
 	def _build_embed(
 		item: Dict[str, Any],
 		currency_symbol: str,
 		currency_name: str,
 	) -> discord.Embed:
-		base_price = float(item.get("base_price", 0.0))
-		ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)))
-
-		embed = discord.Embed(
-			title=f"🛒 {item.get('nombre', item.get('item_key'))}",
-			description=str(item.get("descripcion") or "Sin descripción."),
-			color=discord.Color.blurple(),
-		)
-
-		embed.add_field(
-			name="Precio Base",
-			value=f"{DiscordStorePackager._format_number(base_price)} {currency_symbol}",
-			inline=True,
-		)
-		embed.add_field(name="ip%", value=f"{DiscordStorePackager._format_number(ip_percent)}%", inline=True)
-
-		return embed
+		_ = currency_name  # reservado para usos futuros
+		item_category = DiscordStorePackager._normalize_item_category(item)
+		if item_category == "card":
+			return DiscordStorePackager._build_card_embed(item=item, currency_symbol=currency_symbol)
+		return DiscordStorePackager._build_sound_embed(item=item, currency_symbol=currency_symbol)
 
 	@staticmethod
 	def _build_files(item: Dict[str, Any]) -> list[discord.File]:
 		files: list[discord.File] = []
 
-		thumbnail_path = DiscordStorePackager._resolve_abs(str(item.get("thumbnail", "")))
-		video_path = DiscordStorePackager._resolve_abs(str(item.get("video", "")))
-		audio_path = DiscordStorePackager._resolve_abs(str(item.get("audio", "")))
-
-		if thumbnail_path.exists() and thumbnail_path.is_file():
-			files.append(discord.File(thumbnail_path, filename=thumbnail_path.name))
-		if video_path.exists() and video_path.is_file():
-			files.append(discord.File(video_path, filename=video_path.name))
-		if audio_path.exists() and audio_path.is_file():
-			files.append(discord.File(audio_path, filename=audio_path.name))
+		for key in ("thumbnail", "video", "audio"):
+			raw_value = item.get(key)
+			if not isinstance(raw_value, str) or not raw_value.strip():
+				continue
+			path = DiscordStorePackager._resolve_abs(raw_value)
+			if path.exists() and path.is_file():
+				files.append(discord.File(path, filename=path.name))
 
 		return files
 
@@ -171,13 +434,15 @@ class DiscordStorePackager:
 		bot: commands.Bot,
 		guild_id: int,
 		force_republish: bool = False,
+		item_id: Optional[str] = None,
 	) -> Dict[str, Any]:
 		"""
-		Publica el catálogo de la tienda en el foro configurado para un servidor.
+		Publica o actualiza el catálogo de la tienda en el foro configurado para un servidor.
 		
 		- Lee items desde store_manager.
-		- Publica cada item como hilo de foro.
-		- Evita duplicados usando índice local por guild.
+		- Si el hilo ya existe, lo actualiza (embed, tags, botón).
+		- Si no existe, lo publica.
+		- Permite filtrar por internal_id (S1, S2, ...).
 		"""
 		guild = bot.get_guild(int(guild_id))
 		if guild is None:
@@ -185,6 +450,7 @@ class DiscordStorePackager:
 				"success": False,
 				"message": f"Guild no encontrada: {guild_id}",
 				"published": 0,
+				"updated": 0,
 				"skipped": 0,
 				"failed": 0,
 			}
@@ -195,12 +461,42 @@ class DiscordStorePackager:
 				"success": False,
 				"message": "No hay foro de tienda configurado en channels.py (store_forum_channel)",
 				"published": 0,
+				"updated": 0,
 				"skipped": 0,
 				"failed": 0,
 			}
 
 		sync_result = store_manager.refresh_store_items()
 		items = store_manager.get_store_items()
+		requested_internal_id = DiscordStorePackager._normalize_internal_id(item_id)
+		if item_id is not None and requested_internal_id is None:
+			return {
+				"success": False,
+				"message": f"ID de item inválido: {item_id}. Usa formato S1, S2, ...",
+				"published": 0,
+				"updated": 0,
+				"skipped": 0,
+				"failed": 0,
+				"errors": [],
+			}
+
+		if requested_internal_id is not None:
+			items = [
+				item
+				for item in items
+				if DiscordStorePackager._normalize_internal_id(item.get("internal_id")) == requested_internal_id
+			]
+			if not items:
+				return {
+					"success": False,
+					"message": f"No existe item con ID `{requested_internal_id}`",
+					"published": 0,
+					"updated": 0,
+					"skipped": 0,
+					"failed": 0,
+					"errors": [],
+				}
+
 		index = DiscordStorePackager._load_posts_index(guild.id)
 		posts_index: Dict[str, Any] = index.get("posts", {})
 		store_config = get_store_config(guild.id)
@@ -209,6 +505,7 @@ class DiscordStorePackager:
 		currency_name = economy_config.get_currency_name()
 
 		published = 0
+		updated = 0
 		skipped = 0
 		failed = 0
 		errors: list[str] = []
@@ -221,37 +518,110 @@ class DiscordStorePackager:
 				continue
 
 			known_thread_id = posts_index.get(item_key)
-			thread_exists = False
-			if known_thread_id and not force_republish:
-				thread = guild.get_thread(int(known_thread_id))
-				if thread is None:
-					thread = bot.get_channel(int(known_thread_id))
-				if isinstance(thread, discord.Thread):
-					thread_exists = True
+			if not known_thread_id:
+				for _, info in store_config.list_purchase_buttons().items():
+					if str(info.get("item_key") or "").strip() == item_key and info.get("thread_id") is not None:
+						known_thread_id = int(info.get("thread_id"))
+						posts_index[item_key] = known_thread_id
+						break
 
-			if thread_exists and not force_republish:
-				skipped += 1
-				continue
+			thread_obj: Optional[discord.Thread] = None
+			if known_thread_id and not force_republish:
+				thread_obj = guild.get_thread(int(known_thread_id))
+				if thread_obj is None:
+					thread_obj = bot.get_channel(int(known_thread_id))
 
 			embed = DiscordStorePackager._build_embed(
 				item,
 				currency_symbol=currency_symbol,
 				currency_name=currency_name,
 			)
+			tag_specs = DiscordStorePackager._build_item_tag_specs(item)
+			tags_by_name = await DiscordStorePackager._ensure_forum_tags(forum_channel, tag_specs)
+			applied_tags = [tags_by_name[name.lower()] for name, _ in tag_specs if name.lower() in tags_by_name]
 			buy_view = DiscordStorePackager._build_buy_view(guild_id=guild.id, item_key=item_key)
 			files = DiscordStorePackager._build_files(item)
 			if files:
-				embed.set_thumbnail(url=f"attachment://{Path(str(item.get('thumbnail'))).name}")
+				item_category = DiscordStorePackager._normalize_item_category(item)
+				thumbnail_name = Path(str(item.get("thumbnail"))).name
+				if item_category == "card":
+					embed.set_image(url=f"attachment://{thumbnail_name}")
+				else:
+					embed.set_thumbnail(url=f"attachment://{thumbnail_name}")
 
-			thread_name = f"🛍️ {item.get('nombre', item_key)}"
+			thread_name = f"{item.get('nombre', item_key)}"
 			if len(thread_name) > 100:
 				thread_name = thread_name[:100]
+
+			if isinstance(thread_obj, discord.Thread) and not force_republish:
+				try:
+					await thread_obj.edit(
+						name=thread_name,
+						applied_tags=applied_tags if applied_tags else [],
+						reason="PowerBot store sync: actualizar item",
+					)
+
+					buttons = store_config.list_purchase_buttons()
+					custom_id = DiscordStorePackager._build_buy_custom_id(guild_id=guild.id, item_key=item_key)
+					message_id: Optional[int] = None
+					for saved_custom_id, info in buttons.items():
+						if str(info.get("item_key") or "").strip() != item_key:
+							continue
+						if info.get("thread_id") is not None and int(info.get("thread_id")) != int(thread_obj.id):
+							continue
+						custom_id = saved_custom_id
+						if info.get("message_id") is not None:
+							message_id = int(info.get("message_id"))
+						break
+
+					buy_view = StoreBuyButtonView(item_key=item_key, custom_id=custom_id)
+					starter_message: Optional[discord.Message] = None
+
+					if message_id is not None:
+						try:
+							starter_message = await thread_obj.fetch_message(message_id)
+						except Exception:
+							starter_message = None
+
+					if starter_message is None:
+						async for msg in thread_obj.history(limit=1, oldest_first=True):
+							starter_message = msg
+							break
+
+					if starter_message is None:
+						raise RuntimeError("No se encontró mensaje inicial del hilo para actualizar")
+
+					if files:
+						try:
+							await starter_message.edit(embed=embed, view=buy_view, attachments=files)
+						except TypeError:
+							await starter_message.edit(embed=embed, view=buy_view)
+					else:
+						try:
+							await starter_message.edit(embed=embed, view=buy_view, attachments=[])
+						except TypeError:
+							await starter_message.edit(embed=embed, view=buy_view)
+
+					store_config.set_purchase_button(
+						custom_id=custom_id,
+						item_key=item_key,
+						thread_id=int(thread_obj.id),
+						message_id=int(starter_message.id),
+					)
+					bot.add_view(buy_view)
+					updated += 1
+					continue
+				except Exception as exc:
+					failed += 1
+					errors.append(f"{item_key}: {exc}")
+					logger.error(f"Error actualizando item {item_key} en guild {guild.id}: {exc}")
+					continue
 
 			try:
 				created = await forum_channel.create_thread(
 					name=thread_name,
-					content="Publicación automática de catálogo store.",
 					embed=embed,
+					applied_tags=applied_tags if applied_tags else None,
 					view=buy_view,
 					files=files if files else None,
 				)
@@ -281,12 +651,14 @@ class DiscordStorePackager:
 
 		return {
 			"success": failed == 0,
-			"message": "Store publicado" if failed == 0 else "Store publicado con errores",
+			"message": "Store sincronizado" if failed == 0 else "Store sincronizado con errores",
 			"forum_channel_id": forum_channel.id,
 			"sync": sync_result,
 			"published": published,
+			"updated": updated,
 			"skipped": skipped,
 			"failed": failed,
+			"filtered_item_id": requested_internal_id,
 			"errors": errors,
 		}
 

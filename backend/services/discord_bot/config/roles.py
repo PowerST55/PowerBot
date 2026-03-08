@@ -23,6 +23,8 @@ class RolesConfig:
         self._defaults = {
             "dj": None,
             "mod": [],  # MOD es una lista porque puede haber múltiples
+            # Rol principal de streamer del servidor
+            "streamer": None,
             # Rol usado para notificaciones (ej: streams en vivo)
             "notifications": None,
         }

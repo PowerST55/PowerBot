@@ -21,8 +21,8 @@ def setup_gamble_commands(bot: commands.Bot) -> None:
 	"""Registra comandos de gamble"""
 
 	@bot.tree.command(name="g", description="Apuesta puntos para ganar o perder")
-	@app_commands.describe(cantidad="Cantidad a apostar o 'all'")
-	async def g(interaction: discord.Interaction, cantidad: str):
+	@app_commands.describe(cantidad="Cantidad a apostar, 'all' o vacio para auto-minimo")
+	async def g(interaction: discord.Interaction, cantidad: Optional[str] = None):
 		economy_config = get_economy_config(interaction.guild.id)
 		currency_name = economy_config.get_currency_name()
 		currency_symbol = economy_config.get_currency_symbol()
@@ -49,10 +49,13 @@ def setup_gamble_commands(bot: commands.Bot) -> None:
 
 		current_balance = _get_current_balance(user.user_id)
 
-		bet_amount, error = _parse_bet_amount(cantidad, current_balance)
-		if error:
-			await interaction.response.send_message(error, ephemeral=True)
-			return
+		if cantidad is None:
+			bet_amount = _resolve_default_bet_amount(min_limit)
+		else:
+			bet_amount, error = _parse_bet_amount(cantidad, current_balance)
+			if error:
+				await interaction.response.send_message(error, ephemeral=True)
+				return
 
 		# Verificar limite inferior
 		if min_limit > 0 and bet_amount < min_limit:
@@ -155,6 +158,11 @@ def setup_gamble_commands(bot: commands.Bot) -> None:
 		embed.timestamp = datetime.now(timezone.utc)
 
 		await interaction.followup.send(embed=embed)
+
+
+def _resolve_default_bet_amount(min_limit: float) -> float:
+	"""Apuesta por defecto para comando sin cantidad: max(min_limit, 5)."""
+	return round(max(float(min_limit or 0.0), 5.0), 2)
 
 
 def _parse_bet_amount(value: str, current_balance: float) -> tuple[Optional[float], Optional[str]]:

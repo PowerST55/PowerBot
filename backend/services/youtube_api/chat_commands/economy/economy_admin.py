@@ -39,11 +39,6 @@ async def process_admin_economy_command(
 		return False
 
 	if not (message.is_moderator or message.is_owner):
-		await send_chat_message(
-			client,
-			live_chat_id,
-			"Solo moderadores pueden usar este comando.",
-		)
 		return True
 
 	if len(args) < 2:
