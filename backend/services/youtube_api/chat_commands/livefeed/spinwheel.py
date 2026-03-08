@@ -41,11 +41,11 @@ async def process_spinwheel_participation_command(
 	)
 
 	if not added:
-		await send_chat_message(client, live_chat_id, f"⚠ @{message.author_name} ya estás dentro de esta ruleta.")
+		await send_chat_message(client, live_chat_id, f"⚠ {message.author_name} ya estás dentro de esta ruleta.")
 		return True
 
 	assert participant is not None
 	await ws_spinwheel.add_item(participant.username, participant.avatar_url or DEFAULT_AVATAR)
-	await send_chat_message(client, live_chat_id, f"✅ @{participant.username} se unió a la ruleta.")
+	await send_chat_message(client, live_chat_id, f"✅ {participant.username} se unió a la ruleta.")
 	return True
 

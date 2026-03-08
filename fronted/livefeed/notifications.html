@@ -89,7 +89,7 @@
             if (!path) return '';
             const normalized = normalizePath(path).replace(/\/+$/, '');
             if (!normalized) return '';
-            if (/^(https?:)?\/\//i.test(normalized)) return normalized;
+            if (/^(https?:)?\/\//i.test(normalized)) return rewriteLoopbackUrlForBrowser(normalized);
             if (normalized.startsWith('/')) return normalized;
             return `/${normalized}`;
         }
@@ -119,6 +119,19 @@
             return String(path).replace(/\\/g, '/').trim();
         }
 
+        function rewriteLoopbackUrlForBrowser(urlValue) {
+            try {
+                const parsed = new URL(urlValue, window.location.origin);
+                if (["127.0.0.1", "localhost", "0.0.0.0"].includes(parsed.hostname)) {
+                    parsed.protocol = window.location.protocol;
+                    parsed.host = window.location.host;
+                }
+                return parsed.toString();
+            } catch (_error) {
+                return urlValue;
+            }
+        }
+
         function isAbsoluteMediaUrl(path) {
             return /^(https?:)?\/\//i.test(path) || path.startsWith('/');
         }
@@ -126,7 +139,7 @@
         function toMediaUrl(path, notifId, basePath) {
             const normalized = normalizePath(path);
             if (!normalized) return '';
-            if (isAbsoluteMediaUrl(normalized)) return normalized;
+            if (isAbsoluteMediaUrl(normalized)) return rewriteLoopbackUrlForBrowser(normalized);
             if (notifId) {
                 const base = normalizeStoreBasePath(basePath || storePath || getStoreBaseCandidates()[0]);
                 if (!base) return '';
@@ -175,8 +188,9 @@
                 if (!normalizedValue) return;
 
                 if (isAbsoluteMediaUrl(normalizedValue)) {
-                    if (!candidates.includes(normalizedValue)) {
-                        candidates.push(normalizedValue);
+                    const rewrittenAbsolute = rewriteLoopbackUrlForBrowser(normalizedValue);
+                    if (!candidates.includes(rewrittenAbsolute)) {
+                        candidates.push(rewrittenAbsolute);
                     }
                     return;
                 }
@@ -302,6 +316,17 @@
                 await audioElement.play();
             } catch (error) {
                 console.warn('⚠ No se pudo reproducir el sonido de notificacion:', error);
+
+                if (audioPath !== defaultNotificationSound) {
+                    try {
+                        await primeNotificationAudio(defaultNotificationSound);
+                        audioElement.currentTime = 0;
+                        await audioElement.play();
+                        console.warn('⚠ Se uso sonido por defecto por fallo en audio configurado del item.');
+                    } catch (fallbackError) {
+                        console.warn('⚠ Tambien fallo el sonido por defecto:', fallbackError);
+                    }
+                }
             }
         }
 
