@@ -20,6 +20,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .quota_guard import is_quota_exhausted, get_remaining_seconds, mark_quota_exhausted
+
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -154,6 +156,12 @@ class YouTubeClient:
         Returns:
             Live chat ID or None if no active broadcast found.
         """
+        if is_quota_exhausted():
+            logger.warning(
+                "YouTube quota bloqueada temporalmente (%ss restantes). Omitiendo get_active_live_chat_id().",
+                get_remaining_seconds(),
+            )
+            return None
         try:
             request = self.service.liveBroadcasts().list(
                 part="snippet", broadcastStatus="active"
@@ -170,6 +178,8 @@ class YouTubeClient:
 
         except HttpError as e:
             logger.error(f"HTTP error getting live chat ID: {e}")
+            if "quotaExceeded" in str(e):
+                mark_quota_exhausted(reason="get_active_live_chat_id quotaExceeded")
             return None
         except Exception as e:
             logger.error(f"Unexpected error getting live chat ID: {e}")
@@ -187,6 +197,12 @@ class YouTubeClient:
         Returns:
             Response dict with message ID if successful, or error info dict.
         """
+        if is_quota_exhausted():
+            logger.warning(
+                "YouTube quota bloqueada temporalmente (%ss restantes). Omitiendo send_message().",
+                get_remaining_seconds(),
+            )
+            return {"quota_error": True, "blocked": True}
         try:
             response = self.service.liveChatMessages().insert(
                 part="snippet",
@@ -213,6 +229,7 @@ class YouTubeClient:
         except HttpError as e:
             if "quotaExceeded" in str(e):
                 logger.warning("⚠️  YouTube API quota exceeded")
+                mark_quota_exhausted(reason="send_message quotaExceeded")
                 return {"quota_error": True}
             elif "403" in str(e):
                 logger.error(f"❌ Access forbidden - check permissions: {e}")

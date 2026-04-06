@@ -5,8 +5,8 @@ Este módulo es agnóstico de Discord. Se encarga de:
 - Calcular qué impuestos están vencidos según su intervalo.
 - Determinar el usuario objetivo (usuario fijo o Top N global).
 - Calcular el monto del impuesto sobre el balance global del usuario
-  (todas las plataformas).
-- Aplicar el descuento usando economy_manager.apply_balance_delta.
+	(todas las plataformas).
+- Aplicar el descuento y devolverlo explícitamente al fondo común.
 
 La notificación a economy_channel puede hacerse usando el resultado
 devuelto por collect_due_taxes() desde el contexto de Discord.
@@ -117,8 +117,9 @@ def collect_due_taxes() -> List[TaxChargeResult]:
 			taxes_config.update_tax_last_run(tax.id, now)
 			continue
 
-		# Aplicar descuento (delta negativo). Usamos plataforma "system"
-		# para indicar que no viene de Discord/YT directamente.
+		# Aplicar descuento y devolverlo explícitamente al fondo común.
+		# La plataforma "system" solo marca que el cobro no proviene de
+		# Discord o YouTube de forma directa.
 		new_balance = float(
 			economy_manager.apply_balance_delta(
 				user_id=user_id,
@@ -128,6 +129,7 @@ def collect_due_taxes() -> List[TaxChargeResult]:
 				guild_id=None,
 				channel_id=None,
 				source_id=f"tax:{tax.id}:{int(now)}",
+				system_account=economy_manager.COMMON_FUND_ACCOUNT,
 			)
 		)
 

@@ -13,10 +13,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from backend.services.youtube_api.quota_guard import (
+	is_quota_exhausted,
+	get_remaining_seconds,
+	mark_quota_exhausted,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -59,6 +66,7 @@ class StreamManager:
 
 		# Estado en memoria
 		self._state: StreamInfo = StreamInfo()
+		self._min_api_interval_seconds = int(os.getenv("YT_STREAM_MIN_API_INTERVAL_SEC", "25"))
 
 		# Cargar estado previo si existe
 		self._load_state()
@@ -152,7 +160,39 @@ class StreamManager:
 			  - changed (bool) -> si cambió el estado respecto al anterior
 		"""
 
-		now_iso = datetime.utcnow().isoformat()
+		# Refrescar desde disco para coordinar cache entre distintos módulos/instancias.
+		self._load_state()
+		now_dt = datetime.utcnow()
+		now_iso = now_dt.isoformat()
+
+		if is_quota_exhausted():
+			return {
+				"is_live": self._state.is_live,
+				"title": self._state.title,
+				"url": self._state.url,
+				"video_id": self._state.video_id,
+				"changed": False,
+				"source": "quota_guard",
+				"quota_exhausted": True,
+				"quota_remaining_seconds": get_remaining_seconds(),
+			}
+
+		last_checked = self._state.last_checked
+		if last_checked:
+			try:
+				last_checked_dt = datetime.fromisoformat(last_checked)
+				if (now_dt - last_checked_dt).total_seconds() < self._min_api_interval_seconds:
+					return {
+						"is_live": self._state.is_live,
+						"title": self._state.title,
+						"url": self._state.url,
+						"video_id": self._state.video_id,
+						"changed": False,
+						"source": "cache",
+					}
+			except ValueError:
+				# Si el formato no es parseable, ignoramos cache y hacemos fetch.
+				pass
 
 		try:
 			# Usamos directamente el servicio subyacente para evitar
@@ -220,6 +260,8 @@ class StreamManager:
 
 		except Exception as exc:  # pragma: no cover - sólo logging
 			logger.error("Error al detectar stream activo: %s", exc)
+			if "quotaExceeded" in str(exc):
+				mark_quota_exhausted(reason="stream_manager detect_stream quotaExceeded")
 			# No tocamos el estado salvo last_checked para saber que se intentó
 			self._state.last_checked = now_iso
 			self._save_state()
@@ -230,6 +272,7 @@ class StreamManager:
 				"video_id": self._state.video_id,
 				"changed": False,
 				"error": str(exc),
+				"quota_exhausted": "quotaExceeded" in str(exc),
 			}
 
 

@@ -9,7 +9,11 @@ from typing import List, Optional, TYPE_CHECKING
 
 from backend.managers import economy_manager
 from backend.managers.user_lookup_manager import find_user_by_youtube_channel_id
-from backend.services.activities import cooldown_manager, gamble_master, games_config
+from backend.services.activities import cooldown_manager, gamble_master, games_config, casino_master
+from backend.services.discord_bot.economy.economy_channel import (
+	get_casino_bankruptcy_state,
+	register_casino_bankruptcy,
+)
 
 from ...config.economy import get_youtube_economy_config
 from ...send_message import send_chat_message
@@ -48,15 +52,21 @@ def _get_current_balance(user_id: int) -> float:
 	return float(economy_manager.get_total_balance(user_id))
 
 
-def _apply_balance_delta(user_id: int, delta: float, reason: str, source_id: str | None) -> float:
-	return float(
-		economy_manager.apply_balance_delta(
-			user_id=user_id,
-			delta=delta,
-			reason=reason,
-			platform="youtube",
-			source_id=source_id,
-		)
+def _is_casino_bankrupt(casino_fund_balance: float) -> bool:
+	state = get_casino_bankruptcy_state()
+	if bool(state.get("is_bankrupt")):
+		return True
+	return float(casino_fund_balance) <= 0
+
+
+def _settle_casino_bet(user_id: int, delta: float, reason: str, source_id: str | None) -> dict:
+	return economy_manager.settle_casino_bet(
+		user_id=user_id,
+		delta=delta,
+		reason=reason,
+		platform="youtube",
+		source_id=source_id,
+		allow_negative_casino_fund=True,
 	)
 
 
@@ -85,7 +95,8 @@ async def process_gamble_command(
 		return True
 
 	config = games_config.get_gamble_config()
-	limit = float(config.get("limit", 0.0) or 0.0)
+	min_limit = float(config.get("min_limit", 0.0) or 0.0)
+	max_limit = float(config.get("max_limit", 0.0) or 0.0)
 	cooldown_seconds = int(config.get("cooldown", 0) or 0)
 
 	can_play, remaining = cooldown_manager.check_cooldown(
@@ -107,11 +118,19 @@ async def process_gamble_command(
 
 	assert bet_amount is not None
 
-	if limit > 0 and bet_amount > limit:
+	if min_limit > 0 and bet_amount < min_limit:
 		await send_chat_message(
 			client,
 			live_chat_id,
-			f"❌ Límite de gamble: {limit:,.2f}. Intentaste {bet_amount:,.2f}.",
+			f"❌ Límite mínimo de gamble: {min_limit:,.2f}. Intentaste {bet_amount:,.2f}.",
+		)
+		return True
+
+	if max_limit > 0 and bet_amount > max_limit:
+		await send_chat_message(
+			client,
+			live_chat_id,
+			f"❌ Límite máximo de gamble: {max_limit:,.2f}. Intentaste {bet_amount:,.2f}.",
 		)
 		return True
 
@@ -120,15 +139,45 @@ async def process_gamble_command(
 		await send_chat_message(client, live_chat_id, f"❌ {validation_message}")
 		return True
 
-	roll, ganancia_neta, multiplicador, rango = gamble_master.calculate_gamble_result(bet_amount)
-	cooldown_manager.update_cooldown(str(message.author_channel_id), "gamble")
+	casino_fund_balance = economy_manager.get_casino_fund_balance()
+	if _is_casino_bankrupt(casino_fund_balance):
+		state = get_casino_bankruptcy_state()
+		cause_display = str(state.get("cause_display") or "un jugador")
+		await send_chat_message(
+			client,
+			live_chat_id,
+			f"🎰 El casino está en bancarrota por causa de {cause_display}. Las mesas siguen cerradas hasta recargar fondo_casino.",
+		)
+		return True
 
-	new_balance = _apply_balance_delta(
+	roll, ganancia_neta, multiplicador, rango = gamble_master.calculate_gamble_result(bet_amount, casino_fund_balance)
+
+	settlement = _settle_casino_bet(
 		user_id=lookup.user_id,
 		delta=ganancia_neta,
 		reason="gamble",
 		source_id=f"yt_gamble:{message.id or message.author_channel_id}:{message.published_at}",
 	)
+	if not settlement.get("success"):
+		await send_chat_message(client, live_chat_id, f"❌ No se pudo liquidar la jugada: {settlement.get('error', 'error desconocido')}")
+		return True
+
+	cooldown_manager.update_cooldown(str(message.author_channel_id), "gamble")
+
+	new_balance = float(settlement["user_balance"])
+	casino_balance_after = float(settlement["casino_balance_after"])
+
+	if settlement.get("bankruptcy_triggered"):
+		register_casino_bankruptcy(
+			cause_display=f"@{message.author_name}",
+			cause_platform="youtube",
+			cause_user_id=str(message.author_channel_id),
+			game_name="gamble",
+			previous_balance=float(settlement["casino_balance_before"]),
+			new_balance=casino_balance_after,
+			bet_amount=bet_amount,
+			net_result=ganancia_neta,
+		)
 
 	economy_config = get_youtube_economy_config()
 	symbol = economy_config.get_currency_symbol()

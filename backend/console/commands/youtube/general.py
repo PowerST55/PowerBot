@@ -150,6 +150,39 @@ async def _shutdown_yapi_runtime(console) -> list[str]:
     return actions
 
 
+async def _auto_disable_on_quota_exhausted(console, source: str = "quotaExceeded") -> None:
+    """Apaga runtime YouTube automáticamente al detectar quota agotada."""
+    global _autostream_task
+
+    console.print(
+        f"[warning]⚠ YouTube quota agotada detectada ({source}). Desactivando runtime automáticamente...[/warning]"
+    )
+
+    # Evitar esperar stop() sobre el mismo task del listener.
+    listener = _get_listener()
+    if listener:
+        _set_listener(None)
+
+    chat_manager = _get_chat_id_manager()
+    if chat_manager and getattr(chat_manager, "is_monitoring", False):
+        try:
+            await chat_manager.stop_monitoring()
+        except Exception:
+            pass
+    _set_chat_id_manager(None)
+
+    yt = _get_youtube()
+    if yt and yt.is_connected():
+        yt.disconnect()
+    _set_youtube(None)
+
+    if _autostream_task and not _autostream_task.done():
+        _autostream_task.cancel()
+    _autostream_task = None
+
+    console.print("[warning]🛑 YouTube runtime y autostream detenidos por quota agotada[/warning]")
+
+
 def _is_yapi_active() -> bool:
     """Indica si YAPI tiene algún componente activo."""
 
@@ -226,7 +259,11 @@ async def _start_yapi_runtime(console) -> bool:
             command_processor_handler,
         )
 
-        listener = YouTubeListener(yt.client, live_chat_id)
+        listener = YouTubeListener(
+            yt.client,
+            live_chat_id,
+            on_quota_exhausted=lambda reason: _auto_disable_on_quota_exhausted(console, reason),
+        )
 
         # Agregar handlers
         listener.add_message_handler(console_message_handler)
@@ -499,6 +536,10 @@ async def _start_autostream_loop(interval: int) -> None:
             result = stream_manager.detect_stream(yt.client)
             is_live = bool(result.get("is_live"))
             changed = bool(result.get("changed"))
+
+            if result.get("quota_exhausted"):
+                await _auto_disable_on_quota_exhausted(console, "autostream detect_stream")
+                break
 
             # Feedback básico en consola cuando cambie el estado del stream
             if changed:
@@ -820,7 +861,11 @@ async def cmd_youtube_listener(ctx: CommandContext) -> None:
             command_processor_handler
         )
         
-        listener = YouTubeListener(yt.client, live_chat_id)
+        listener = YouTubeListener(
+            yt.client,
+            live_chat_id,
+            on_quota_exhausted=lambda reason: _auto_disable_on_quota_exhausted(console, reason),
+        )
         
         # Agregar handlers
         listener.add_message_handler(console_message_handler)

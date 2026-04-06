@@ -7,40 +7,50 @@ from decimal import Decimal
 import random
 from typing import Dict, Tuple
 
+from backend.services.activities import casino_master
 
-def calculate_gamble_result(bet_amount: float) -> Tuple[int, float, float, str]:
+
+GAMBLE_OUTCOMES = [
+	{"min_roll": 1, "max_roll": 25, "multiplier": 0.0, "label": "0-25: Perdiste todo", "base_weight": 25.0},
+	{"min_roll": 26, "max_roll": 40, "multiplier": 0.5, "label": "26-40: Recuperaste el 50%", "base_weight": 15.0},
+	{"min_roll": 41, "max_roll": 55, "multiplier": 1.0, "label": "41-55: Reembolso completo", "base_weight": 15.0},
+	{"min_roll": 56, "max_roll": 70, "multiplier": 1.3, "label": "56-70: Ganaste 30% extra", "base_weight": 15.0},
+	{"min_roll": 71, "max_roll": 85, "multiplier": 1.6, "label": "71-85: Ganaste 60% extra", "base_weight": 15.0},
+	{"min_roll": 86, "max_roll": 95, "multiplier": 2.0, "label": "86-95: Duplicaste tu apuesta", "base_weight": 10.0},
+	{"min_roll": 96, "max_roll": 99, "multiplier": 2.5, "label": "96-99: Premio grande", "base_weight": 4.0},
+	{"min_roll": 100, "max_roll": 100, "multiplier": 4.0, "label": "100: Jackpot", "base_weight": 1.0},
+]
+
+
+def calculate_gamble_result(bet_amount: float, casino_fund_balance: float) -> Tuple[int, float, float, str]:
 	"""
-	Calcula el resultado del gamble usando las mismas probabilidades del sistema anterior.
+	Calcula el resultado del gamble según la liquidez actual del casino.
 
 	Returns:
 		Tuple[roll, ganancia_neta, multiplicador, rango]
 	"""
-	roll = random.randint(1, 100)
+	bet_amount = round(float(bet_amount), 2)
+	casino_fund_balance = round(float(casino_fund_balance), 2)
+	health_score = casino_master.get_casino_health_score(casino_fund_balance, bet_amount)
 
-	if roll <= 25:
-		multiplicador = 0.0
-		rango = "0-25: Perdiste todo"
-	elif roll <= 40:
-		multiplicador = 0.5
-		rango = "26-40: Recuperaste el 50%"
-	elif roll <= 55:
-		multiplicador = 1.0
-		rango = "41-55: Reembolso completo"
-	elif roll <= 70:
-		multiplicador = 1.3
-		rango = "56-70: Ganaste 30% extra"
-	elif roll <= 85:
-		multiplicador = 1.6
-		rango = "71-85: Ganaste 60% extra"
-	elif roll <= 95:
-		multiplicador = 2.0
-		rango = "86-95: Duplicaste tu apuesta"
-	elif roll <= 99:
-		multiplicador = 2.5
-		rango = "96-99: Premio grande"
-	else:
-		multiplicador = 4.0
-		rango = "100: Jackpot"
+	dynamic_weights = []
+	for outcome in GAMBLE_OUTCOMES:
+		base_weight = float(outcome["base_weight"])
+		multiplier = float(outcome["multiplier"])
+		net_win = round((bet_amount * multiplier) - bet_amount, 2)
+		if net_win > 0:
+			weight_factor = casino_master.get_positive_outcome_weight(net_win, casino_fund_balance, bet_amount)
+		elif net_win == 0:
+			weight_factor = 0.95 + (0.20 * health_score)
+		else:
+			weight_factor = 1.10 - (0.10 * health_score)
+		dynamic_weights.append(base_weight * weight_factor)
+
+	normalized_weights = casino_master.normalize_weights(dynamic_weights)
+	selected = random.choices(GAMBLE_OUTCOMES, weights=normalized_weights, k=1)[0]
+	roll = random.randint(int(selected["min_roll"]), int(selected["max_roll"]))
+	multiplicador = float(selected["multiplier"])
+	rango = str(selected["label"])
 
 	payout_total = round(bet_amount * multiplicador, 2)
 	ganancia_neta = round(payout_total - bet_amount, 2)

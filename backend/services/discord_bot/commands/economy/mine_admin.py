@@ -43,21 +43,29 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 		await interaction.response.send_message(embed=embed, ephemeral=True)
 
 	@mine_group.command(name="add", description="Agrega ítem de mina (solo admin)")
-	@app_commands.describe(name="Nombre del ítem", price="Valor que suma al balance", probability="Probabilidad 1-100")
-	async def mine_add(interaction: discord.Interaction, name: str, price: float, probability: int):
+	@app_commands.describe(
+		name="Nombre del ítem",
+		price="Valor fijo del ítem. Puede ser negativo para objetos malos",
+		probability="Probabilidad 1-100",
+		ip_percent="Opcional: porcentaje del patrimonio a descontar si el ítem es negativo",
+	)
+	async def mine_add(interaction: discord.Interaction, name: str, price: float, probability: int, ip_percent: float = 0.0):
 		if not interaction.user.guild_permissions.administrator:
 			await _deny_permission(interaction)
 			return
 
-		if price <= 0:
-			await interaction.response.send_message("El precio debe ser mayor a 0.", ephemeral=True)
+		if price == 0:
+			await interaction.response.send_message("El precio no puede ser 0.", ephemeral=True)
 			return
 		if probability < 1 or probability > 100:
 			await interaction.response.send_message("La probabilidad debe estar entre 1 y 100.", ephemeral=True)
 			return
+		if ip_percent < 0:
+			await interaction.response.send_message("El ip% no puede ser negativo.", ephemeral=True)
+			return
 
 		config = get_mine_config(interaction.guild.id)
-		ok = config.add_item(name=name, price=price, probability=probability)
+		ok = config.add_item(name=name, price=price, probability=probability, ip_percent=ip_percent)
 		if not ok:
 			await interaction.response.send_message(
 				f"No se pudo agregar `{name}`. Ya existe o es inválido.",
@@ -68,10 +76,11 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 		embed = discord.Embed(
 			title="✅ Ítem agregado",
 			description=f"Se agregó `{name}` a la mina.",
-			color=discord.Color.green(),
+			color=discord.Color.red() if price < 0 else discord.Color.green(),
 		)
 		embed.add_field(name="Precio", value=f"`{price:,.2f}`", inline=True)
 		embed.add_field(name="Probabilidad", value=f"`{probability}%`", inline=True)
+		embed.add_field(name="ip%", value=f"`{ip_percent:,.2f}%`", inline=True)
 		await interaction.response.send_message(embed=embed, ephemeral=True)
 
 	@mine_group.command(name="remove", description="Elimina ítem de mina (solo admin)")
@@ -108,7 +117,11 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 
 		if items:
 			rows = [
-				f"• `{item.get('name')}` → `{float(item.get('price', 0)):,.2f}` | `{int(item.get('probability', 0))}%`"
+				(
+					f"• `{item.get('name')}` → `{float(item.get('price', 0)):,.2f}` | "
+					f"`{int(item.get('probability', 0))}%` | "
+					f"`ip {float(item.get('ip_percent', item.get('ip%', 0.0)) or 0.0):,.2f}%`"
+				)
 				for item in items
 			]
 			embed.description = "\n".join(rows)

@@ -3,60 +3,23 @@ Logica reutilizable para tragamonedas.
 """
 from __future__ import annotations
 
-import json
 import random
-from pathlib import Path
 from typing import Dict, List, Tuple
+
+from backend.services.activities import casino_master
 
 
 SLOT_PAYOUTS = {
 	"🍒": {"x3": 2.5, "x2": 1.05, "prob": 0.35},
 	"🍍": {"x3": 4.0, "x2": 1.1, "prob": 0.25},
 	"🍎": {"x3": 6.0, "x2": 1.2, "prob": 0.15},
-	"🍇": {"x3": 10.0, "x2": 1.4, "prob": 0.08},
-	"🥭": {"x3": 20.0, "x2": 1.8, "prob": 0.04},
-	"🔔": {"x3": 30.0, "x2": 2.2, "prob": 0.02},
-	"💎": {"x3": 999.0, "x2": 99.0, "prob": 0.01},
+	"🍇": {"x3": 10.0, "x2": 1.4, "prob": 0.10},
+	"🥭": {"x3": 20.0, "x2": 1.8, "prob": 0.07},
+	"🔔": {"x3": 30.0, "x2": 2.2, "prob": 0.04},
+	"💎": {"x3": 100.0, "x2": 60.0, "prob": 0.03},
 }
 
 SLOT_SYMBOLS = list(SLOT_PAYOUTS.keys())
-SLOT_WEIGHTS = [SLOT_PAYOUTS[s]["prob"] for s in SLOT_SYMBOLS]
-
-LUCK_FILE = Path(__file__).resolve().parents[2] / "data" / "activities" / "slot_luck.json"
-
-
-def load_luck_multipliers() -> Dict[str, float]:
-	try:
-		with LUCK_FILE.open("r", encoding="utf-8") as handle:
-			return json.load(handle)
-	except (FileNotFoundError, json.JSONDecodeError):
-		return {}
-
-
-def save_luck_multipliers(luck_data: Dict[str, float]) -> None:
-	LUCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-	with LUCK_FILE.open("w", encoding="utf-8") as handle:
-		json.dump(luck_data, handle, indent=4, ensure_ascii=False)
-
-
-def get_user_luck_multiplier(user_id: str) -> float:
-	luck_data = load_luck_multipliers()
-	return float(luck_data.get(str(user_id), 1.0))
-
-
-def update_user_luck_multiplier(user_id: str, multiplier: float) -> None:
-	luck_data = load_luck_multipliers()
-	luck_data[str(user_id)] = round(max(1.0, multiplier), 2)
-	save_luck_multipliers(luck_data)
-
-
-def reset_user_luck_multiplier(user_id: str) -> None:
-	update_user_luck_multiplier(user_id, 1.0)
-
-
-def increment_user_luck_multiplier(user_id: str, increment: float = 0.1) -> None:
-	current = get_user_luck_multiplier(user_id)
-	update_user_luck_multiplier(user_id, current + increment)
 
 
 def validate_gamble(user_points: float, bet_amount: float, max_bet: float | None = None) -> Tuple[bool, str]:
@@ -77,17 +40,32 @@ def validate_gamble(user_points: float, bet_amount: float, max_bet: float | None
 	return True, ""
 
 
-def spin_slots(bet_amount: int, user_id: str) -> Tuple[List[str], int, float, str, bool, float]:
-	luck_multiplier = get_user_luck_multiplier(user_id)
+def spin_slots(bet_amount: int, casino_fund_balance: float) -> Tuple[List[str], int, float, str, bool, str]:
+	health_score = casino_master.get_casino_health_score(casino_fund_balance, bet_amount)
+	casino_tier = casino_master.get_casino_tier(casino_fund_balance, bet_amount)
 
 	result_type = random.choices(
 		["loss", "x2", "x3"],
-		weights=[0.70, 0.20, 0.10],
+		weights=casino_master.normalize_weights([
+			0.60 - (0.06 * health_score),
+			0.26 + (0.03 * health_score),
+			0.14 + (0.03 * health_score),
+		]),
 		k=1
 	)[0]
 
-	prob_sum = sum(SLOT_PAYOUTS[s]["prob"] for s in SLOT_SYMBOLS)
-	relative_weights = [SLOT_PAYOUTS[s]["prob"] / prob_sum for s in SLOT_SYMBOLS]
+	x2_symbol_weights = []
+	x3_symbol_weights = []
+	for symbol in SLOT_SYMBOLS:
+		x2_net_win = round((bet_amount * SLOT_PAYOUTS[symbol]["x2"]) - bet_amount, 2)
+		x3_net_win = round((bet_amount * SLOT_PAYOUTS[symbol]["x3"]) - bet_amount, 2)
+		base_prob = float(SLOT_PAYOUTS[symbol]["prob"])
+		x2_symbol_weights.append(
+			base_prob * casino_master.get_positive_outcome_weight(x2_net_win, casino_fund_balance, bet_amount)
+		)
+		x3_symbol_weights.append(
+			base_prob * casino_master.get_positive_outcome_weight(x3_net_win, casino_fund_balance, bet_amount)
+		)
 
 	if result_type == "loss":
 		combo = [random.choice(SLOT_SYMBOLS) for _ in range(3)]
@@ -95,29 +73,29 @@ def spin_slots(bet_amount: int, user_id: str) -> Tuple[List[str], int, float, st
 			combo = [random.choice(SLOT_SYMBOLS) for _ in range(3)]
 
 		ganancia_neta = -bet_amount
-		return combo, ganancia_neta, 0.0, "Sin premio", False, luck_multiplier
+		return combo, ganancia_neta, 0.0, "Sin premio", False, casino_tier
 
 	if result_type == "x2":
-		symbol = random.choices(SLOT_SYMBOLS, weights=relative_weights, k=1)[0]
+		symbol = random.choices(SLOT_SYMBOLS, weights=casino_master.normalize_weights(x2_symbol_weights), k=1)[0]
 		combo = [symbol, symbol, random.choice(SLOT_SYMBOLS)]
 		while combo[2] == symbol:
 			combo[2] = random.choice(SLOT_SYMBOLS)
 		random.shuffle(combo)
 
 		multiplicador = SLOT_PAYOUTS[symbol]["x2"]
-		payout = int(bet_amount * multiplicador * luck_multiplier)
+		payout = int(round(bet_amount * multiplicador))
 		ganancia_neta = payout - bet_amount
 
-		return combo, ganancia_neta, multiplicador, f"{symbol} X2", True, luck_multiplier
+		return combo, ganancia_neta, multiplicador, f"{symbol} X2", True, casino_tier
 
-	symbol = random.choices(SLOT_SYMBOLS, weights=relative_weights, k=1)[0]
+	symbol = random.choices(SLOT_SYMBOLS, weights=casino_master.normalize_weights(x3_symbol_weights), k=1)[0]
 	combo = [symbol, symbol, symbol]
 
 	multiplicador = SLOT_PAYOUTS[symbol]["x3"]
-	payout = int(bet_amount * multiplicador * luck_multiplier)
+	payout = int(round(bet_amount * multiplicador))
 	ganancia_neta = payout - bet_amount
 
-	return combo, ganancia_neta, multiplicador, f"{symbol} X3", True, luck_multiplier
+	return combo, ganancia_neta, multiplicador, f"{symbol} X3", True, casino_tier
 
 
 def get_slot_summary(
@@ -128,7 +106,7 @@ def get_slot_summary(
 	multiplicador: float,
 	descripcion: str,
 	es_ganancia: bool,
-	luck_multiplier: float,
+	casino_tier: str,
 	puntos_finales: int,
 ) -> Dict[str, object]:
 	if not es_ganancia:
@@ -172,6 +150,6 @@ def get_slot_summary(
 		"resultado_emoji": resultado_emoji,
 		"color": color,
 		"tipo_resultado": tipo_resultado,
-		"luck_multiplier": luck_multiplier,
+		"casino_tier": casino_tier,
 		"payout_total": payout_total,
 	}

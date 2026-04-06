@@ -171,18 +171,33 @@ def _get_current_balance(user_id: int) -> float:
 	return float(economy_manager.get_total_balance(user_id))
 
 
-def _apply_balance_delta(user_id: int, delta: float, reason: str, interaction: discord.Interaction) -> float:
-	"""Aplica un cambio al balance del usuario y registra la transacción"""
-	return float(
-		economy_manager.apply_balance_delta(
-			user_id=user_id,
-			delta=delta,
-			reason=reason,
-			platform="discord",
-			guild_id=str(interaction.guild.id) if interaction.guild else None,
-			channel_id=str(interaction.channel.id) if interaction.channel else None,
-			source_id=f"ppt:{interaction.id}",
-		)
+def _transfer_ppt_bet(
+	*,
+	loser_user_id: int,
+	winner_user_id: int,
+	amount: float,
+	interaction: discord.Interaction,
+) -> dict:
+	"""Liquida una apuesta PPT con una transferencia directa usuario a usuario."""
+	return economy_manager.transfer_points(
+		from_user_id=loser_user_id,
+		to_user_id=winner_user_id,
+		amount=amount,
+		guild_id=str(interaction.guild.id) if interaction.guild else None,
+		platform="discord",
+	)
+
+
+def _build_settlement_error_embed(error_message: str) -> discord.Embed:
+	"""Genera un embed uniforme para fallos al liquidar la apuesta."""
+	return discord.Embed(
+		title="❌ Juego Anulado",
+		description=(
+			"No se pudo liquidar la apuesta entre los jugadores. "
+			"No se movieron fondos del sistema y la partida quedó sin efecto.\n\n"
+			f"Detalle: {error_message}"
+		),
+		color=0xFF0000,
 	)
 
 
@@ -334,21 +349,18 @@ async def play_ppt_game(
 		)
 		
 	elif winner == 1:  # Gana player1 (primer jugador)
-		# Restar puntos al perdedor
-		_apply_balance_delta(
-			user_id=player2.user_id,
-			delta=-bet_amount,
-			reason="ppt_loss",
-			interaction=interaction
+		transfer_result = _transfer_ppt_bet(
+			loser_user_id=player2.user_id,
+			winner_user_id=player1.user_id,
+			amount=bet_amount,
+			interaction=interaction,
 		)
-		
-		# Sumar puntos al ganador
-		p1_new_balance = _apply_balance_delta(
-			user_id=player1.user_id,
-			delta=bet_amount,
-			reason="ppt_win",
-			interaction=interaction
-		)
+		if not transfer_result.get("success"):
+			await public_message.edit(
+				embed=_build_settlement_error_embed(str(transfer_result.get("error", "No se pudo completar la transferencia."))),
+				view=None,
+			)
+			return
 		
 		embed_resultado = discord.Embed(
 			title="🏆 ¡Victoria!",
@@ -370,23 +382,28 @@ async def play_ppt_game(
 			value=f"{first_player.mention} gana **+{bet_amount:,.2f}{currency_symbol}**\n{second_player.mention} pierde **-{bet_amount:,.2f}{currency_symbol}**",
 			inline=False
 		)
+		embed_resultado.add_field(
+			name="📊 Balances",
+			value=(
+				f"{first_player.mention}: **{float(transfer_result['to_balance']):,.2f}{currency_symbol}**\n"
+				f"{second_player.mention}: **{float(transfer_result['from_balance']):,.2f}{currency_symbol}**"
+			),
+			inline=False
+		)
 		
 	else:  # Gana player2 (segundo jugador)
-		# Restar puntos al perdedor
-		_apply_balance_delta(
-			user_id=player1.user_id,
-			delta=-bet_amount,
-			reason="ppt_loss",
-			interaction=interaction
+		transfer_result = _transfer_ppt_bet(
+			loser_user_id=player1.user_id,
+			winner_user_id=player2.user_id,
+			amount=bet_amount,
+			interaction=interaction,
 		)
-		
-		# Sumar puntos al ganador
-		p2_new_balance = _apply_balance_delta(
-			user_id=player2.user_id,
-			delta=bet_amount,
-			reason="ppt_win",
-			interaction=interaction
-		)
+		if not transfer_result.get("success"):
+			await public_message.edit(
+				embed=_build_settlement_error_embed(str(transfer_result.get("error", "No se pudo completar la transferencia."))),
+				view=None,
+			)
+			return
 		
 		embed_resultado = discord.Embed(
 			title="🏆 ¡Victoria!",
@@ -406,6 +423,14 @@ async def play_ppt_game(
 		embed_resultado.add_field(
 			name="💰 Recompensa",
 			value=f"{second_player.mention} gana **+{bet_amount:,.2f}{currency_symbol}**\n{first_player.mention} pierde **-{bet_amount:,.2f}{currency_symbol}**",
+			inline=False
+		)
+		embed_resultado.add_field(
+			name="📊 Balances",
+			value=(
+				f"{second_player.mention}: **{float(transfer_result['to_balance']):,.2f}{currency_symbol}**\n"
+				f"{first_player.mention}: **{float(transfer_result['from_balance']):,.2f}{currency_symbol}**"
+			),
 			inline=False
 		)
 	
@@ -685,18 +710,18 @@ async def _handle_ppt_command(
 			inline=False,
 		)
 	elif winner == 1:
-		_apply_balance_delta(
-			user_id=opponent_data.user_id,
-			delta=-bet_amount,
-			reason="ppt_loss",
+		transfer_result = _transfer_ppt_bet(
+			loser_user_id=opponent_data.user_id,
+			winner_user_id=challenger_data.user_id,
+			amount=bet_amount,
 			interaction=interaction,
 		)
-		_apply_balance_delta(
-			user_id=challenger_data.user_id,
-			delta=bet_amount,
-			reason="ppt_win",
-			interaction=interaction,
-		)
+		if not transfer_result.get("success"):
+			await public_message.edit(
+				embed=_build_settlement_error_embed(str(transfer_result.get("error", "No se pudo completar la transferencia."))),
+				view=None,
+			)
+			return
 		result_embed = discord.Embed(
 			title="🏆 ¡Victoria!",
 			description=(
@@ -720,19 +745,27 @@ async def _handle_ppt_command(
 			value=f"{interaction.user.mention} gana **+{bet_amount:,.2f}{currency_symbol}**\n{opponent.mention} pierde **-{bet_amount:,.2f}{currency_symbol}**",
 			inline=False,
 		)
+		result_embed.add_field(
+			name="📊 Balances",
+			value=(
+				f"{interaction.user.mention}: **{float(transfer_result['to_balance']):,.2f}{currency_symbol}**\n"
+				f"{opponent.mention}: **{float(transfer_result['from_balance']):,.2f}{currency_symbol}**"
+			),
+			inline=False,
+		)
 	else:
-		_apply_balance_delta(
-			user_id=challenger_data.user_id,
-			delta=-bet_amount,
-			reason="ppt_loss",
+		transfer_result = _transfer_ppt_bet(
+			loser_user_id=challenger_data.user_id,
+			winner_user_id=opponent_data.user_id,
+			amount=bet_amount,
 			interaction=interaction,
 		)
-		_apply_balance_delta(
-			user_id=opponent_data.user_id,
-			delta=bet_amount,
-			reason="ppt_win",
-			interaction=interaction,
-		)
+		if not transfer_result.get("success"):
+			await public_message.edit(
+				embed=_build_settlement_error_embed(str(transfer_result.get("error", "No se pudo completar la transferencia."))),
+				view=None,
+			)
+			return
 		result_embed = discord.Embed(
 			title="🏆 ¡Victoria!",
 			description=(
@@ -754,6 +787,14 @@ async def _handle_ppt_command(
 		result_embed.add_field(
 			name="💰 Recompensa",
 			value=f"{opponent.mention} gana **+{bet_amount:,.2f}{currency_symbol}**\n{interaction.user.mention} pierde **-{bet_amount:,.2f}{currency_symbol}**",
+			inline=False,
+		)
+		result_embed.add_field(
+			name="📊 Balances",
+			value=(
+				f"{opponent.mention}: **{float(transfer_result['to_balance']):,.2f}{currency_symbol}**\n"
+				f"{interaction.user.mention}: **{float(transfer_result['from_balance']):,.2f}{currency_symbol}**"
+			),
 			inline=False,
 		)
 

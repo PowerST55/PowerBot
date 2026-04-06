@@ -15,13 +15,54 @@ from backend.managers.user_manager import (
 	get_discord_profile_by_discord_id,
 	get_discord_profile_by_user_id,
 	get_youtube_profile_by_channel_id,
+	get_youtube_profile_by_user_id,
 )
 
 SUPPORTED_PLATFORMS = ("discord", "youtube")
+COMMON_FUND_ACCOUNT = "common_fund"
+CASINO_FUND_ACCOUNT = "casino_fund"
+MINE_FUND_ACCOUNT = "mine_fund"
+
+SYSTEM_FUND_DESCRIPTIONS = {
+	COMMON_FUND_ACCOUNT: "Fondo comun de la economia",
+	CASINO_FUND_ACCOUNT: "Fondo operativo del casino",
+	MINE_FUND_ACCOUNT: "Fondo operativo de la mina",
+}
+
+EARNING_FULL_FUND_COVERAGE = 20
+EARNING_HALF_FUND_COVERAGE = 8
+CASINO_BANKRUPTCY_THRESHOLD = 0.0
 
 
 def _round_amount(value: float | int) -> float:
 	return round(float(value), 2)
+
+
+def _calculate_dynamic_earning_amount(base_amount: float, common_fund_balance: float) -> float:
+	"""Reduce el earning cuando el fondo comun pierde estabilidad.
+
+	Regla basada en cobertura del fondo respecto al earning base:
+	- cobertura >= 20x: 100%
+	- cobertura >= 8x: 50%
+	- cobertura > 0: 25%
+	- sin saldo: 0%
+	"""
+	base_amount = _round_amount(base_amount)
+	common_fund_balance = _round_amount(common_fund_balance)
+	if base_amount <= 0 or common_fund_balance <= 0:
+		return 0.0
+
+	if common_fund_balance >= _round_amount(base_amount * EARNING_FULL_FUND_COVERAGE):
+		multiplier = 1.0
+	elif common_fund_balance >= _round_amount(base_amount * EARNING_HALF_FUND_COVERAGE):
+		multiplier = 0.5
+	else:
+		multiplier = 0.25
+
+	effective_amount = _round_amount(base_amount * multiplier)
+	if effective_amount <= 0:
+		return 0.0
+	return _round_amount(min(effective_amount, common_fund_balance))
 
 
 def _enqueue_progress_event(
@@ -60,6 +101,35 @@ def _enqueue_progress_event(
 		pass
 
 
+def _enqueue_user_progress_event(
+	user_id: int,
+	platform: str,
+	previous_balance: float,
+	new_balance: float,
+) -> None:
+	"""Encola eventos de progreso para la plataforma operativa del movimiento."""
+	platform = _normalize_user_platform(platform)
+	if platform == "discord":
+		discord_profile = get_discord_profile_by_user_id(int(user_id))
+		if discord_profile and getattr(discord_profile, "discord_id", None):
+			_enqueue_progress_event(
+				platform="discord",
+				platform_user_id=str(discord_profile.discord_id),
+				previous_balance=_round_amount(previous_balance),
+				new_balance=_round_amount(new_balance),
+			)
+		return
+
+	youtube_profile = get_youtube_profile_by_user_id(int(user_id))
+	if youtube_profile and getattr(youtube_profile, "youtube_channel_id", None):
+		_enqueue_progress_event(
+			platform="youtube",
+			platform_user_id=str(youtube_profile.youtube_channel_id),
+			previous_balance=_round_amount(previous_balance),
+			new_balance=_round_amount(new_balance),
+		)
+
+
 def _ensure_earning_cooldown_table(conn) -> None:
 	conn.execute(
 		"""
@@ -87,6 +157,37 @@ def _ensure_wallet_tables(conn) -> None:
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+		)
+		"""
+	)
+
+	conn.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS system_wallets (
+			account_key TEXT PRIMARY KEY,
+			balance REAL NOT NULL DEFAULT 0,
+			description TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+		"""
+	)
+
+	conn.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS system_wallet_ledger (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_key TEXT NOT NULL,
+			amount REAL NOT NULL,
+			reason TEXT NOT NULL,
+			counterparty_type TEXT,
+			counterparty_id TEXT,
+			platform TEXT,
+			guild_id TEXT,
+			channel_id TEXT,
+			source_id TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(account_key, source_id)
 		)
 		"""
 	)
@@ -152,6 +253,132 @@ def _ensure_platform_wallet_row(conn, user_id: int, platform: str, now_iso: str)
 	)
 
 
+def _normalize_user_platform(platform: str | None) -> str:
+	platform_text = str(platform or "discord").strip().lower()
+	if platform_text not in SUPPORTED_PLATFORMS:
+		return "discord"
+	return platform_text
+
+
+def _ensure_system_fund_row(conn, account_key: str, now_iso: str) -> None:
+	conn.execute(
+		"""
+		INSERT INTO system_wallets (account_key, balance, description, created_at, updated_at)
+		VALUES (?, 0, ?, ?, ?)
+		ON CONFLICT(account_key) DO NOTHING
+		""",
+		(
+			str(account_key).strip().lower(),
+			SYSTEM_FUND_DESCRIPTIONS.get(str(account_key).strip().lower(), "Fondo del sistema"),
+			now_iso,
+			now_iso,
+		),
+	)
+
+
+def _ensure_common_fund_row(conn, now_iso: str) -> None:
+	_ensure_system_fund_row(conn, COMMON_FUND_ACCOUNT, now_iso)
+
+
+def _get_system_fund_balance_in_conn(conn, account_key: str, now_iso: str | None = None) -> float:
+	ensure_now_iso = now_iso or datetime.utcnow().isoformat()
+	account_key = str(account_key).strip().lower()
+	_ensure_system_fund_row(conn, account_key, ensure_now_iso)
+	row = conn.execute(
+		"SELECT balance FROM system_wallets WHERE account_key = ?",
+		(account_key,),
+	).fetchone()
+	return _round_amount(row["balance"] if row else 0.0)
+
+
+def _get_common_fund_balance_in_conn(conn, now_iso: str | None = None) -> float:
+	return _get_system_fund_balance_in_conn(conn, COMMON_FUND_ACCOUNT, now_iso)
+
+
+def _log_system_fund_movement(
+	conn,
+	account_key: str,
+	amount: float,
+	reason: str,
+	now_iso: str,
+	counterparty_type: str | None = None,
+	counterparty_id: str | None = None,
+	platform: str | None = None,
+	guild_id: str | None = None,
+	channel_id: str | None = None,
+	source_id: str | None = None,
+) -> None:
+	conn.execute(
+		"""
+		INSERT INTO system_wallet_ledger (
+			account_key, amount, reason, counterparty_type, counterparty_id,
+			platform, guild_id, channel_id, source_id, created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		(
+			str(account_key).strip().lower(),
+			_round_amount(amount),
+			reason,
+			counterparty_type,
+			counterparty_id,
+			platform,
+			guild_id,
+			channel_id,
+			source_id,
+			now_iso,
+		),
+	)
+
+
+def _log_common_fund_movement(conn, amount: float, reason: str, now_iso: str, **log_kwargs) -> None:
+	_log_system_fund_movement(
+		conn,
+		COMMON_FUND_ACCOUNT,
+		amount,
+		reason,
+		now_iso,
+		**log_kwargs,
+	)
+
+
+def _credit_system_fund(conn, account_key: str, amount: float, now_iso: str, **log_kwargs) -> float:
+	credit = _round_amount(amount)
+	account_key = str(account_key).strip().lower()
+	_ensure_system_fund_row(conn, account_key, now_iso)
+	conn.execute(
+		"UPDATE system_wallets SET balance = balance + ?, updated_at = ? WHERE account_key = ?",
+		(credit, now_iso, account_key),
+	)
+	_log_system_fund_movement(conn, account_key, credit, now_iso=now_iso, **log_kwargs)
+	return _get_system_fund_balance_in_conn(conn, account_key, now_iso)
+
+
+def _credit_common_fund(conn, amount: float, now_iso: str, **log_kwargs) -> float:
+	return _credit_system_fund(conn, COMMON_FUND_ACCOUNT, amount, now_iso, **log_kwargs)
+
+
+def _debit_system_fund(conn, account_key: str, amount: float, now_iso: str, allow_negative: bool = False, **log_kwargs) -> float:
+	debit = _round_amount(amount)
+	account_key = str(account_key).strip().lower()
+	_ensure_system_fund_row(conn, account_key, now_iso)
+	current_balance = _get_system_fund_balance_in_conn(conn, account_key, now_iso)
+	if not allow_negative and current_balance < debit:
+		raise ValueError(
+			f"Fondos insuficientes en {account_key}. Disponible: {current_balance:,.2f}"
+		)
+	conn.execute(
+		"UPDATE system_wallets SET balance = balance - ?, updated_at = ? WHERE account_key = ?",
+		(debit, now_iso, account_key),
+	)
+	_log_system_fund_movement(conn, account_key, -debit, now_iso=now_iso, **log_kwargs)
+	return _get_system_fund_balance_in_conn(conn, account_key, now_iso)
+
+
+def _debit_common_fund(conn, amount: float, now_iso: str, allow_negative: bool = False, **log_kwargs) -> float:
+	return _debit_system_fund(conn, COMMON_FUND_ACCOUNT, amount, now_iso, allow_negative=allow_negative, **log_kwargs)
+
+
 def _sync_wallet_total(conn, user_id: int, now_iso: str) -> float:
 	row = conn.execute(
 		"SELECT COALESCE(SUM(balance), 0) AS total FROM platform_wallets WHERE user_id = ?",
@@ -173,6 +400,7 @@ def _sync_wallet_total(conn, user_id: int, now_iso: str) -> float:
 
 def _credit_platform_balance(conn, user_id: int, platform: str, amount: float, now_iso: str) -> float:
 	_credit = _round_amount(amount)
+	platform = _normalize_user_platform(platform)
 	_ensure_platform_wallet_row(conn, user_id, platform, now_iso)
 	conn.execute(
 		"UPDATE platform_wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ? AND platform = ?",
@@ -200,6 +428,7 @@ def _deduct_from_combined_balance(conn, user_id: int, amount: float, preferred_p
 		return True
 
 	balances = _get_platform_balances(conn, user_id)
+	preferred_platform = _normalize_user_platform(preferred_platform)
 	ordered_platforms: list[str] = []
 	for platform in [preferred_platform, "discord", "youtube"]:
 		if platform in balances and platform not in ordered_platforms:
@@ -226,6 +455,200 @@ def _deduct_from_combined_balance(conn, user_id: int, amount: float, preferred_p
 
 	_sync_wallet_total(conn, user_id, now_iso)
 	return True
+
+
+def _transfer_common_fund_to_user(
+	conn,
+	user_id: int,
+	amount: float,
+	reason: str,
+	platform: str,
+	now_iso: str,
+	guild_id: Optional[str] = None,
+	channel_id: Optional[str] = None,
+	source_id: Optional[str] = None,
+	allow_negative_common_fund: bool = False,
+) -> float:
+	amount = _round_amount(amount)
+	ledger_platform = str(platform or "discord").strip().lower()
+	user_platform = _normalize_user_platform(platform)
+	_debit_common_fund(
+		conn,
+		amount,
+		now_iso,
+		allow_negative=allow_negative_common_fund,
+		reason=reason,
+		counterparty_type="user",
+		counterparty_id=str(user_id),
+		platform=ledger_platform,
+		guild_id=guild_id,
+		channel_id=channel_id,
+		source_id=source_id,
+	)
+	new_total = _credit_platform_balance(conn, user_id, user_platform, amount, now_iso)
+	conn.execute(
+		"""
+		INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		(user_id, amount, reason, ledger_platform, guild_id, channel_id, source_id, now_iso),
+	)
+	return new_total
+
+
+def _transfer_system_fund_to_user(
+	conn,
+	account_key: str,
+	user_id: int,
+	amount: float,
+	reason: str,
+	platform: str,
+	now_iso: str,
+	guild_id: Optional[str] = None,
+	channel_id: Optional[str] = None,
+	source_id: Optional[str] = None,
+	allow_negative_system_fund: bool = False,
+) -> float:
+	amount = _round_amount(amount)
+	ledger_platform = str(platform or "discord").strip().lower()
+	user_platform = _normalize_user_platform(platform)
+	_debit_system_fund(
+		conn,
+		account_key,
+		amount,
+		now_iso,
+		allow_negative=allow_negative_system_fund,
+		reason=reason,
+		counterparty_type="user",
+		counterparty_id=str(user_id),
+		platform=ledger_platform,
+		guild_id=guild_id,
+		channel_id=channel_id,
+		source_id=source_id,
+	)
+	new_total = _credit_platform_balance(conn, user_id, user_platform, amount, now_iso)
+	conn.execute(
+		"""
+		INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		(user_id, amount, reason, ledger_platform, guild_id, channel_id, source_id, now_iso),
+	)
+	return new_total
+
+
+def _transfer_user_to_common_fund(
+	conn,
+	user_id: int,
+	amount: float,
+	reason: str,
+	platform: str,
+	now_iso: str,
+	guild_id: Optional[str] = None,
+	channel_id: Optional[str] = None,
+	source_id: Optional[str] = None,
+	allow_negative_balance: bool = False,
+) -> float:
+	amount = _round_amount(amount)
+	ledger_platform = str(platform or "discord").strip().lower()
+	user_platform = _normalize_user_platform(platform)
+	if allow_negative_balance:
+		_ensure_platform_wallet_row(conn, user_id, user_platform, now_iso)
+		conn.execute(
+			"UPDATE platform_wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ? AND platform = ?",
+			(amount, now_iso, user_id, user_platform),
+		)
+		new_total = _sync_wallet_total(conn, user_id, now_iso)
+	else:
+		ok = _deduct_from_combined_balance(
+			conn,
+			user_id,
+			amount,
+			preferred_platform=user_platform,
+			now_iso=now_iso,
+		)
+		if not ok:
+			raise ValueError("Saldo insuficiente para transferir al fondo comun")
+		new_total = _sync_wallet_total(conn, user_id, now_iso)
+
+	_credit_common_fund(
+		conn,
+		amount,
+		now_iso,
+		reason=reason,
+		counterparty_type="user",
+		counterparty_id=str(user_id),
+		platform=ledger_platform,
+		guild_id=guild_id,
+		channel_id=channel_id,
+		source_id=source_id,
+	)
+	conn.execute(
+		"""
+		INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		(user_id, -amount, reason, ledger_platform, guild_id, channel_id, source_id, now_iso),
+	)
+	return new_total
+
+
+def _transfer_user_to_system_fund(
+	conn,
+	account_key: str,
+	user_id: int,
+	amount: float,
+	reason: str,
+	platform: str,
+	now_iso: str,
+	guild_id: Optional[str] = None,
+	channel_id: Optional[str] = None,
+	source_id: Optional[str] = None,
+	allow_negative_balance: bool = False,
+) -> float:
+	amount = _round_amount(amount)
+	ledger_platform = str(platform or "discord").strip().lower()
+	user_platform = _normalize_user_platform(platform)
+	if allow_negative_balance:
+		_ensure_platform_wallet_row(conn, user_id, user_platform, now_iso)
+		conn.execute(
+			"UPDATE platform_wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ? AND platform = ?",
+			(amount, now_iso, user_id, user_platform),
+		)
+		new_total = _sync_wallet_total(conn, user_id, now_iso)
+	else:
+		ok = _deduct_from_combined_balance(
+			conn,
+			user_id,
+			amount,
+			preferred_platform=user_platform,
+			now_iso=now_iso,
+		)
+		if not ok:
+			raise ValueError(f"Saldo insuficiente para transferir a {account_key}")
+		new_total = _sync_wallet_total(conn, user_id, now_iso)
+
+	_credit_system_fund(
+		conn,
+		account_key,
+		amount,
+		now_iso,
+		reason=reason,
+		counterparty_type="user",
+		counterparty_id=str(user_id),
+		platform=ledger_platform,
+		guild_id=guild_id,
+		channel_id=channel_id,
+		source_id=source_id,
+	)
+	conn.execute(
+		"""
+		INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		""",
+		(user_id, -amount, reason, ledger_platform, guild_id, channel_id, source_id, now_iso),
+	)
+	return new_total
 
 
 def award_message_points(
@@ -279,15 +702,29 @@ def award_message_points(
 				conn.rollback()
 				return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
-		global_points = _credit_platform_balance(conn, user_id, "discord", amount, now_iso)
-
-		conn.execute(
-			"""
-			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""",
-			(user_id, amount, "message_earning", "discord", guild_id_text, None, source_id, now_iso),
+		effective_amount = _calculate_dynamic_earning_amount(
+			base_amount=amount,
+			common_fund_balance=_get_common_fund_balance_in_conn(conn, now_iso),
 		)
+		if effective_amount <= 0:
+			conn.rollback()
+			return {"awarded": 0, "points_added": 0.0, "global_points": None}
+
+		try:
+			global_points = _transfer_common_fund_to_user(
+				conn,
+				user_id=user_id,
+				amount=effective_amount,
+				reason="message_earning",
+				platform="discord",
+				now_iso=now_iso,
+				guild_id=guild_id_text,
+				channel_id=None,
+				source_id=source_id,
+			)
+		except ValueError:
+			conn.rollback()
+			return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
 		if source_id:
 			conn.execute(
@@ -306,7 +743,7 @@ def award_message_points(
 		)
 
 		conn.commit()
-		return {"awarded": 1, "points_added": amount, "global_points": global_points}
+		return {"awarded": 1, "points_added": effective_amount, "global_points": global_points}
 	except Exception:
 		conn.rollback()
 		raise
@@ -365,24 +802,29 @@ def award_youtube_message_points(
 				conn.rollback()
 				return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
-		global_points = _credit_platform_balance(conn, user_id, "youtube", amount, now_iso)
-
-		conn.execute(
-			"""
-			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""",
-			(
-				user_id,
-				amount,
-				"message_earning",
-				"youtube",
-				chat_id_text,
-				str(youtube_channel_id),
-				source_id,
-				now_iso,
-			),
+		effective_amount = _calculate_dynamic_earning_amount(
+			base_amount=amount,
+			common_fund_balance=_get_common_fund_balance_in_conn(conn, now_iso),
 		)
+		if effective_amount <= 0:
+			conn.rollback()
+			return {"awarded": 0, "points_added": 0.0, "global_points": None}
+
+		try:
+			global_points = _transfer_common_fund_to_user(
+				conn,
+				user_id=user_id,
+				amount=effective_amount,
+				reason="message_earning",
+				platform="youtube",
+				now_iso=now_iso,
+				guild_id=chat_id_text,
+				channel_id=str(youtube_channel_id),
+				source_id=source_id,
+			)
+		except ValueError:
+			conn.rollback()
+			return {"awarded": 0, "points_added": 0.0, "global_points": None}
 
 		if source_id:
 			conn.execute(
@@ -401,7 +843,7 @@ def award_youtube_message_points(
 		)
 
 		conn.commit()
-		return {"awarded": 1, "points_added": amount, "global_points": global_points}
+		return {"awarded": 1, "points_added": effective_amount, "global_points": global_points}
 	except Exception:
 		conn.rollback()
 		raise
@@ -495,6 +937,293 @@ def get_total_balance(user_id: int) -> float:
 	return _round_amount(balance.get("global_points", 0.0))
 
 
+def get_common_fund_balance() -> float:
+	"""Obtiene el saldo actual del fondo comun."""
+	return get_system_fund_balance(COMMON_FUND_ACCOUNT)
+
+
+def get_casino_fund_balance() -> float:
+	"""Obtiene el saldo actual del fondo de casino."""
+	return get_system_fund_balance(CASINO_FUND_ACCOUNT)
+
+
+def get_mine_fund_balance() -> float:
+	"""Obtiene el saldo actual del fondo de mina."""
+	return get_system_fund_balance(MINE_FUND_ACCOUNT)
+
+
+def get_system_fund_balance(account_key: str) -> float:
+	"""Obtiene el saldo actual de un fondo del sistema."""
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		return _get_system_fund_balance_in_conn(conn, account_key)
+	finally:
+		conn.close()
+
+
+def get_circulating_supply() -> float:
+	"""Obtiene la cantidad de pews en circulacion dentro de wallets de usuarios."""
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		row = conn.execute("SELECT COALESCE(SUM(balance), 0) AS total FROM wallets").fetchone()
+		return _round_amount(row["total"] if row else 0.0)
+	finally:
+		conn.close()
+
+
+def get_total_supply() -> float:
+	"""Obtiene la oferta total actual sumando circulacion y wallets del sistema."""
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		user_row = conn.execute("SELECT COALESCE(SUM(balance), 0) AS total FROM wallets").fetchone()
+		system_row = conn.execute("SELECT COALESCE(SUM(balance), 0) AS total FROM system_wallets").fetchone()
+		user_total = float(user_row["total"] if user_row else 0.0)
+		system_total = float(system_row["total"] if system_row else 0.0)
+		return _round_amount(user_total + system_total)
+	finally:
+		conn.close()
+
+
+def get_economy_overview() -> Dict[str, float]:
+	"""Resumen rapido del estado de la economia centralizada."""
+	common_fund = get_common_fund_balance()
+	casino_fund = get_casino_fund_balance()
+	mine_fund = get_mine_fund_balance()
+	circulating = get_circulating_supply()
+	total_supply = _round_amount(common_fund + casino_fund + mine_fund + circulating)
+	return {
+		"common_fund": common_fund,
+		"casino_fund": casino_fund,
+		"mine_fund": mine_fund,
+		"circulating_supply": circulating,
+		"total_supply": total_supply,
+	}
+
+
+def adjust_common_fund(delta: float, reason: str = "manual_common_fund_adjustment") -> Dict[str, float]:
+	"""Ajusta manualmente el fondo comun sin afectar wallets de usuarios."""
+	return adjust_system_fund(COMMON_FUND_ACCOUNT, delta, reason=reason)
+
+
+def tax_everyone_to_common_fund(
+	amount_per_user: float,
+	reason: str = "emergency_tax_everyone",
+) -> Dict[str, float | int]:
+	"""Aplica un impuesto global en una sola transacción.
+
+	- Deduce hasta `amount_per_user` del saldo combinado de cada usuario.
+	- Si un usuario tiene menos saldo, se deduce solo lo disponible.
+	- Todo lo recaudado se acredita al fondo común.
+	"""
+	amount_per_user = _round_amount(amount_per_user)
+	if amount_per_user <= 0:
+		raise ValueError("La cantidad a cobrar por usuario debe ser mayor a 0")
+
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		now_iso = datetime.utcnow().isoformat()
+		conn.execute("BEGIN IMMEDIATE")
+
+		# Aseguramos que el fondo común exista antes de aplicar movimientos.
+		_ensure_system_fund_row(conn, COMMON_FUND_ACCOUNT, now_iso)
+
+		rows = conn.execute(
+			"""
+			SELECT user_id, COALESCE(SUM(balance), 0) AS total_balance
+			FROM platform_wallets
+			GROUP BY user_id
+			HAVING total_balance > 0
+			"""
+		).fetchall()
+
+		users_scanned = len(rows)
+		taxed_users = 0
+		total_collected = 0.0
+
+		for row in rows:
+			user_id = int(row["user_id"])
+			available = _round_amount(row["total_balance"])
+			if available <= 0:
+				continue
+
+			amount_to_collect = _round_amount(min(amount_per_user, available))
+			if amount_to_collect <= 0:
+				continue
+
+			_transfer_user_to_common_fund(
+				conn,
+				user_id=user_id,
+				amount=amount_to_collect,
+				reason=reason,
+				platform="discord",
+				now_iso=now_iso,
+				guild_id=None,
+				channel_id=None,
+				source_id=f"{reason}:{now_iso}:user:{user_id}",
+				allow_negative_balance=False,
+			)
+
+			taxed_users += 1
+			total_collected = _round_amount(total_collected + amount_to_collect)
+
+		common_fund_after = _get_common_fund_balance_in_conn(conn, now_iso)
+		circulating_after = _round_amount(
+			conn.execute("SELECT COALESCE(SUM(balance), 0) AS total FROM wallets").fetchone()["total"]
+		)
+		total_supply_after = _round_amount(
+			common_fund_after
+			+ _get_system_fund_balance_in_conn(conn, CASINO_FUND_ACCOUNT, now_iso)
+			+ _get_system_fund_balance_in_conn(conn, MINE_FUND_ACCOUNT, now_iso)
+			+ circulating_after
+		)
+
+		conn.commit()
+		return {
+			"amount_per_user": amount_per_user,
+			"users_scanned": users_scanned,
+			"taxed_users": taxed_users,
+			"total_collected": total_collected,
+			"common_fund": _round_amount(common_fund_after),
+			"circulating_supply": _round_amount(circulating_after),
+			"total_supply": _round_amount(total_supply_after),
+		}
+	except Exception:
+		conn.rollback()
+		raise
+	finally:
+		conn.close()
+
+
+def adjust_casino_fund(delta: float, reason: str = "manual_casino_fund_adjustment") -> Dict[str, float]:
+	"""Ajusta manualmente el fondo de casino sin afectar wallets de usuarios."""
+	return adjust_system_fund(CASINO_FUND_ACCOUNT, delta, reason=reason)
+
+
+def adjust_mine_fund(delta: float, reason: str = "manual_mine_fund_adjustment") -> Dict[str, float]:
+	"""Ajusta manualmente el fondo de mina sin afectar wallets de usuarios."""
+	return adjust_system_fund(MINE_FUND_ACCOUNT, delta, reason=reason)
+
+
+def adjust_system_fund(account_key: str, delta: float, reason: str = "manual_system_fund_adjustment") -> Dict[str, float]:
+	"""Ajusta manualmente un fondo del sistema sin afectar wallets de usuarios."""
+	delta = _round_amount(delta)
+	if delta == 0:
+		return get_economy_overview()
+
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		now_iso = datetime.utcnow().isoformat()
+		conn.execute("BEGIN IMMEDIATE")
+		if delta > 0:
+			fund_balance = _credit_system_fund(
+				conn,
+				account_key,
+				delta,
+				now_iso,
+				reason=reason,
+				counterparty_type="system",
+				counterparty_id="manual",
+				platform="system",
+				source_id=f"{reason}:{now_iso}:credit",
+			)
+		else:
+			fund_balance = _debit_system_fund(
+				conn,
+				account_key,
+				abs(delta),
+				now_iso,
+				allow_negative=False,
+				reason=reason,
+				counterparty_type="system",
+				counterparty_id="manual",
+				platform="system",
+				source_id=f"{reason}:{now_iso}:debit",
+			)
+		conn.commit()
+		overview = get_economy_overview()
+		overview[str(account_key).strip().lower()] = _round_amount(fund_balance)
+		return overview
+	except Exception:
+		conn.rollback()
+		raise
+	finally:
+		conn.close()
+
+
+def transfer_system_funds(
+	from_account_key: str,
+	to_account_key: str,
+	amount: float,
+	reason: str = "system_fund_transfer",
+) -> Dict[str, float]:
+	"""Transfiere saldo entre dos fondos del sistema en una sola transacción."""
+	amount = _round_amount(amount)
+	from_account_key = str(from_account_key).strip().lower()
+	to_account_key = str(to_account_key).strip().lower()
+	if amount <= 0:
+		raise ValueError("La cantidad a transferir debe ser mayor a 0")
+	if from_account_key == to_account_key:
+		raise ValueError("No puedes transferir entre el mismo fondo")
+
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		now_iso = datetime.utcnow().isoformat()
+		conn.execute("BEGIN IMMEDIATE")
+
+		from_before = _get_system_fund_balance_in_conn(conn, from_account_key, now_iso)
+		to_before = _get_system_fund_balance_in_conn(conn, to_account_key, now_iso)
+		if from_before < amount:
+			conn.rollback()
+			raise ValueError(
+				f"Fondos insuficientes en {from_account_key}. Disponible: {from_before:,.2f}"
+			)
+
+		from_after = _debit_system_fund(
+			conn,
+			from_account_key,
+			amount,
+			now_iso,
+			allow_negative=False,
+			reason=reason,
+			counterparty_type="system_fund",
+			counterparty_id=to_account_key,
+			platform="system",
+			source_id=f"{reason}:{now_iso}:debit:{from_account_key}->{to_account_key}",
+		)
+		to_after = _credit_system_fund(
+			conn,
+			to_account_key,
+			amount,
+			now_iso,
+			reason=reason,
+			counterparty_type="system_fund",
+			counterparty_id=from_account_key,
+			platform="system",
+			source_id=f"{reason}:{now_iso}:credit:{from_account_key}->{to_account_key}",
+		)
+		conn.commit()
+		return {
+			"transferred": amount,
+			"from_account": from_account_key,
+			"to_account": to_account_key,
+			"from_balance_before": _round_amount(from_before),
+			"from_balance_after": _round_amount(from_after),
+			"to_balance_before": _round_amount(to_before),
+			"to_balance_after": _round_amount(to_after),
+		}
+	except Exception:
+		conn.rollback()
+		raise
+	finally:
+		conn.close()
+
+
 def apply_balance_delta(
 	user_id: int,
 	delta: float,
@@ -504,11 +1233,12 @@ def apply_balance_delta(
 	channel_id: Optional[str] = None,
 	source_id: Optional[str] = None,
 	allow_negative_balance: bool = False,
+	system_account: Optional[str] = None,
 ) -> float:
 	"""Aplica un delta de saldo en wallet por plataforma y devuelve el total resultante."""
-	platform = str(platform or "discord").lower()
-	if platform not in SUPPORTED_PLATFORMS:
-		platform = "discord"
+	requested_platform = str(platform or "discord").strip().lower()
+	user_platform = _normalize_user_platform(requested_platform)
+	target_system_account = str(system_account or COMMON_FUND_ACCOUNT).strip().lower()
 
 	resolved_user_id = resolve_active_user_id(int(user_id))
 	delta = _round_amount(delta)
@@ -531,64 +1261,166 @@ def apply_balance_delta(
 
 		_ensure_platform_wallet_row(conn, resolved_user_id, "discord", now_iso)
 		_ensure_platform_wallet_row(conn, resolved_user_id, "youtube", now_iso)
+		_ensure_system_fund_row(conn, target_system_account, now_iso)
 		previous_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
 
 		if delta > 0:
-			new_total = _credit_platform_balance(conn, resolved_user_id, platform, delta, now_iso)
+			new_total = _transfer_system_fund_to_user(
+				conn,
+				account_key=target_system_account,
+				user_id=resolved_user_id,
+				amount=delta,
+				reason=reason,
+				platform=requested_platform,
+				now_iso=now_iso,
+				guild_id=guild_id,
+				channel_id=channel_id,
+				source_id=source_id,
+			)
 		else:
-			if allow_negative_balance:
-				conn.execute(
-					"UPDATE platform_wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ? AND platform = ?",
-					(delta, now_iso, resolved_user_id, platform),
-				)
-				new_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
-			else:
-				ok = _deduct_from_combined_balance(
-					conn,
-					resolved_user_id,
-					abs(delta),
-					preferred_platform=platform,
-					now_iso=now_iso,
-				)
-				if not ok:
-					conn.rollback()
-					raise ValueError("Saldo insuficiente para aplicar el delta")
-				new_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
-
-		conn.execute(
-			"""
-			INSERT INTO wallet_ledger (user_id, amount, reason, platform, guild_id, channel_id, source_id, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""",
-			(
-				resolved_user_id,
-				delta,
-				reason,
-				platform,
-				guild_id,
-				channel_id,
-				source_id,
-				now_iso,
-			),
-		)
+			new_total = _transfer_user_to_system_fund(
+				conn,
+				account_key=target_system_account,
+				user_id=resolved_user_id,
+				amount=abs(delta),
+				reason=reason,
+				platform=requested_platform,
+				now_iso=now_iso,
+				guild_id=guild_id,
+				channel_id=channel_id,
+				source_id=source_id,
+				allow_negative_balance=allow_negative_balance,
+			)
 
 		conn.commit()
 
 		final_total = _round_amount(new_total)
-		if platform == "discord":
-			discord_profile = get_discord_profile_by_user_id(resolved_user_id)
-			if discord_profile and getattr(discord_profile, "discord_id", None):
-				_enqueue_progress_event(
-					platform="discord",
-					platform_user_id=str(discord_profile.discord_id),
-					previous_balance=_round_amount(previous_total),
-					new_balance=final_total,
-				)
+		_enqueue_user_progress_event(
+			user_id=resolved_user_id,
+			platform=user_platform,
+			previous_balance=previous_total,
+			new_balance=final_total,
+		)
 
 		return final_total
 	except Exception:
 		conn.rollback()
 		raise
+	finally:
+		conn.close()
+
+
+def settle_casino_bet(
+	user_id: int,
+	delta: float,
+	reason: str,
+	platform: str,
+	guild_id: Optional[str] = None,
+	channel_id: Optional[str] = None,
+	source_id: Optional[str] = None,
+	allow_negative_casino_fund: bool = True,
+) -> Dict[str, any]:
+	"""Liquida una jugada de casino contra el fondo del casino.
+
+	Delta positivo: el usuario gana y el casino paga.
+	Delta negativo: el usuario pierde y el casino cobra.
+	"""
+	requested_platform = str(platform or "discord").strip().lower()
+	user_platform = _normalize_user_platform(requested_platform)
+	resolved_user_id = resolve_active_user_id(int(user_id))
+	delta = _round_amount(delta)
+
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		now_iso = datetime.utcnow().isoformat()
+		conn.execute("BEGIN IMMEDIATE")
+
+		user_row = conn.execute(
+			"SELECT user_id FROM users WHERE user_id = ?",
+			(resolved_user_id,),
+		).fetchone()
+		if not user_row:
+			conn.rollback()
+			return {
+				"success": False,
+				"error": f"Usuario no existe: {resolved_user_id}",
+				"user_balance": None,
+				"casino_balance_before": None,
+				"casino_balance_after": None,
+				"bankruptcy_triggered": False,
+			}
+
+		_ensure_platform_wallet_row(conn, resolved_user_id, "discord", now_iso)
+		_ensure_platform_wallet_row(conn, resolved_user_id, "youtube", now_iso)
+		_ensure_system_fund_row(conn, CASINO_FUND_ACCOUNT, now_iso)
+
+		previous_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
+		casino_balance_before = _get_system_fund_balance_in_conn(conn, CASINO_FUND_ACCOUNT, now_iso)
+
+		if delta > 0:
+			new_total = _transfer_system_fund_to_user(
+				conn,
+				account_key=CASINO_FUND_ACCOUNT,
+				user_id=resolved_user_id,
+				amount=delta,
+				reason=reason,
+				platform=requested_platform,
+				now_iso=now_iso,
+				guild_id=guild_id,
+				channel_id=channel_id,
+				source_id=source_id,
+				allow_negative_system_fund=allow_negative_casino_fund,
+			)
+		elif delta < 0:
+			new_total = _transfer_user_to_system_fund(
+				conn,
+				account_key=CASINO_FUND_ACCOUNT,
+				user_id=resolved_user_id,
+				amount=abs(delta),
+				reason=reason,
+				platform=requested_platform,
+				now_iso=now_iso,
+				guild_id=guild_id,
+				channel_id=channel_id,
+				source_id=source_id,
+				allow_negative_balance=False,
+			)
+		else:
+			new_total = previous_total
+
+		casino_balance_after = _get_system_fund_balance_in_conn(conn, CASINO_FUND_ACCOUNT, now_iso)
+		conn.commit()
+
+		_enqueue_user_progress_event(
+			user_id=resolved_user_id,
+			platform=user_platform,
+			previous_balance=previous_total,
+			new_balance=new_total,
+		)
+
+		return {
+			"success": True,
+			"error": None,
+			"user_balance": _round_amount(new_total),
+			"user_balance_before": _round_amount(previous_total),
+			"casino_balance_before": _round_amount(casino_balance_before),
+			"casino_balance_after": _round_amount(casino_balance_after),
+			"bankruptcy_triggered": (
+				_round_amount(casino_balance_before) > CASINO_BANKRUPTCY_THRESHOLD
+				and _round_amount(casino_balance_after) <= CASINO_BANKRUPTCY_THRESHOLD
+			),
+		}
+	except Exception as exc:
+		conn.rollback()
+		return {
+			"success": False,
+			"error": str(exc),
+			"user_balance": None,
+			"casino_balance_before": None,
+			"casino_balance_after": None,
+			"bankruptcy_triggered": False,
+		}
 	finally:
 		conn.close()
 
@@ -612,8 +1444,7 @@ def transfer_points(
 		return {"success": False, "error": "No puedes transferir puntos a ti mismo", "from_balance": None, "to_balance": None}
 
 	platform = str(platform or "discord").lower()
-	if platform not in SUPPORTED_PLATFORMS:
-		platform = "discord"
+	platform = _normalize_user_platform(platform)
 
 	conn = get_connection()
 	try:

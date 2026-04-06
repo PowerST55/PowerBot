@@ -7,6 +7,7 @@ Incluye persistencia automática de usuarios.
 
 import asyncio
 import logging
+import os
 import ssl
 import hashlib
 from typing import Optional, Callable, Dict, Any, List, Set
@@ -16,6 +17,7 @@ from googleapiclient.errors import HttpError
 from .youtube_core import YouTubeClient
 from .youtube_types import YouTubeMessage
 from .youtube_user_packager import UserPackager
+from .quota_guard import mark_quota_exhausted
 from backend.managers.avatar_manager import AvatarManager
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,13 @@ class YouTubeListener:
     Proporciona una base para procesar comandos y eventos.
     """
     
-    def __init__(self, client: YouTubeClient, live_chat_id: str, enable_user_persistence: bool = True):
+    def __init__(
+        self,
+        client: YouTubeClient,
+        live_chat_id: str,
+        enable_user_persistence: bool = True,
+        on_quota_exhausted: Optional[Callable[[str], Any]] = None,
+    ):
         """
         Inicializa el listener.
         
@@ -51,6 +59,18 @@ class YouTubeListener:
         
         # Configuración de polling
         self.poll_interval_ms = 2000  # Intervalo de polling en milisegundos
+        self.min_poll_interval_ms = int(os.getenv("YT_LISTENER_MIN_POLL_MS", "3500"))
+        self.max_poll_interval_ms = int(os.getenv("YT_LISTENER_MAX_POLL_MS", "15000"))
+        self.idle_backoff_trigger = int(os.getenv("YT_LISTENER_IDLE_TRIGGER", "3"))
+        self.idle_backoff_step_ms = int(os.getenv("YT_LISTENER_IDLE_STEP_MS", "1200"))
+        self.idle_backoff_max_level = int(os.getenv("YT_LISTENER_IDLE_MAX_LEVEL", "6"))
+        self.fetch_retries = int(os.getenv("YT_LISTENER_FETCH_RETRIES", "2"))
+        self.quota_cooldown_seconds = int(os.getenv("YT_LISTENER_QUOTA_COOLDOWN_SEC", "60"))
+        self._idle_polls = 0
+        self._idle_backoff_level = 0
+        self._quota_exceeded_recently = False
+        self._quota_exhausted_hard = False
+        self._on_quota_exhausted = on_quota_exhausted
         
         # Callbacks para procesar mensajes
         self._message_handlers: List[Callable[[YouTubeMessage], None]] = []
@@ -64,8 +84,42 @@ class YouTubeListener:
             self.add_message_handler(self._persist_user_handler)
         
         logger.info(f"YouTubeListener initialized for chat: {live_chat_id}")
+        logger.info(
+            "YouTubeListener polling config: min=%sms max=%sms retries=%s quota_cooldown=%ss",
+            self.min_poll_interval_ms,
+            self.max_poll_interval_ms,
+            self.fetch_retries,
+            self.quota_cooldown_seconds,
+        )
         if enable_user_persistence:
             logger.info("✅ User persistence enabled")
+
+    def _clamp_poll_interval_ms(self, value_ms: int) -> int:
+        return max(self.min_poll_interval_ms, min(self.max_poll_interval_ms, int(value_ms)))
+
+    def _update_poll_interval_from_response(self, response: Dict[str, Any]) -> None:
+        raw_ms = int(response.get("pollingIntervalMillis", self.poll_interval_ms) or self.poll_interval_ms)
+        self.poll_interval_ms = self._clamp_poll_interval_ms(raw_ms)
+
+    def _current_sleep_seconds(self) -> float:
+        effective_ms = self.poll_interval_ms + (self._idle_backoff_level * self.idle_backoff_step_ms)
+        effective_ms = self._clamp_poll_interval_ms(effective_ms)
+        return effective_ms / 1000.0
+
+    async def _handle_quota_exhausted(self) -> None:
+        logger.error("🛑 Quota de YouTube agotada: desactivando listener automáticamente")
+        self.is_running = False
+        self._stop_event.set()
+
+        if not self._on_quota_exhausted:
+            return
+
+        try:
+            maybe_result = self._on_quota_exhausted("quotaExceeded")
+            if asyncio.iscoroutine(maybe_result):
+                await maybe_result
+        except Exception as exc:
+            logger.error("Error ejecutando callback on_quota_exhausted: %s", exc)
     
     def add_message_handler(self, handler: Callable[[YouTubeMessage], None]) -> None:
         """
@@ -134,11 +188,34 @@ class YouTubeListener:
             
             while self.is_running and not self._stop_event.is_set():
                 try:
-                    await self._fetch_and_process_messages()
+                    new_messages_count = await self._fetch_and_process_messages()
+                    if self._quota_exhausted_hard:
+                        await self._handle_quota_exhausted()
+                        break
                     poll_failures = 0  # Reset counter on success
+
+                    if self._quota_exceeded_recently:
+                        logger.warning(
+                            "⚠️ quotaExceeded detectado: pausando listener %ss para mitigar consumo",
+                            self.quota_cooldown_seconds,
+                        )
+                        self._quota_exceeded_recently = False
+                        await asyncio.sleep(self.quota_cooldown_seconds)
+                        continue
+
+                    if new_messages_count > 0:
+                        self._idle_polls = 0
+                        self._idle_backoff_level = 0
+                    else:
+                        self._idle_polls += 1
+                        if self._idle_polls >= self.idle_backoff_trigger:
+                            self._idle_backoff_level = min(
+                                self.idle_backoff_max_level,
+                                self._idle_backoff_level + 1,
+                            )
                     
                     # Esperar el intervalo de polling
-                    poll_interval_seconds = self.poll_interval_ms / 1000.0
+                    poll_interval_seconds = self._current_sleep_seconds()
                     await asyncio.sleep(poll_interval_seconds)
                     
                 except HttpError as e:
@@ -209,7 +286,7 @@ class YouTubeListener:
                 
                 # Guardar el page token para el siguiente fetch
                 self._next_page_token = response.get("nextPageToken")
-                self.poll_interval_ms = response.get("pollingIntervalMillis", 2000)
+                self._update_poll_interval_from_response(response)
                 
                 logger.info(f"Skipped {len(items)} existing messages")
         
@@ -237,7 +314,7 @@ class YouTubeListener:
         digest = hashlib.sha1(fallback_payload.encode("utf-8", errors="ignore")).hexdigest()
         return f"fallback:{digest}"
     
-    async def _fetch_and_process_messages(self) -> None:
+    async def _fetch_and_process_messages(self) -> int:
         """Obtiene y procesa nuevos mensajes con protección robusta."""
         try:
             response = await asyncio.to_thread(
@@ -246,7 +323,7 @@ class YouTubeListener:
             
             if not response:
                 logger.debug("No response from fetch_messages_sync")
-                return
+                return 0
             
             try:
                 items = response.get("items", [])
@@ -286,7 +363,7 @@ class YouTubeListener:
                     self._next_page_token = new_page_token
                     logger.debug(f"Updated page token: {new_page_token[:20]}...")
                 
-                self.poll_interval_ms = response.get("pollingIntervalMillis", 2000)
+                self._update_poll_interval_from_response(response)
                 
                 # Limpiar mensajes antiguos del set (mantener solo los últimos 1000)
                 if len(self._processed_messages) > 1000:
@@ -294,11 +371,14 @@ class YouTubeListener:
                     msg_list = list(self._processed_messages)
                     self._processed_messages = set(msg_list[-500:])
                     logger.debug(f"Cleaned up processed messages cache (kept 500 of {len(msg_list)})")
+                return len(new_messages)
             except Exception as e:
                 logger.error(f"Error in message processing batch: {type(e).__name__}: {e}")
+                return 0
         
         except Exception as e:
             logger.error(f"Error in _fetch_and_process_messages: {type(e).__name__}: {e}")
+            return 0
     
     def _fetch_messages_sync(self) -> Optional[Dict[str, Any]]:
         """
@@ -307,7 +387,7 @@ class YouTubeListener:
         Returns:
             Response de la API o None si hay error después de reintentos
         """
-        max_retries = 3
+        max_retries = max(1, self.fetch_retries)
         retry_delay = 1
         
         for attempt in range(max_retries):
@@ -321,6 +401,7 @@ class YouTubeListener:
                 
                 # ✅ Validar que la respuesta sea válida
                 if response and isinstance(response, dict):
+                    self._quota_exceeded_recently = False
                     logger.debug(f"✅ Fetch successful (attempt {attempt + 1}/{max_retries})")
                     return response
                 else:
@@ -341,6 +422,10 @@ class YouTubeListener:
             except HttpError as e:
                 if "quotaExceeded" in str(e):
                     logger.warning("⚠️  YouTube API quota exceeded")
+                    block_seconds = mark_quota_exhausted(reason="listener liveChatMessages.list quotaExceeded")
+                    self._quota_exceeded_recently = True
+                    self._quota_exhausted_hard = True
+                    logger.error("Quota guard activado por %ss", block_seconds)
                     return None
                 elif "badRequest" in str(e):
                     logger.warning(f"❌ Bad request (chat may be closed): {e}")
@@ -442,6 +527,7 @@ class YouTubeListener:
             "is_running": self.is_running,
             "live_chat_id": self.live_chat_id,
             "poll_interval_ms": self.poll_interval_ms,
+            "effective_poll_interval_ms": int(self._current_sleep_seconds() * 1000),
             "processed_messages_count": len(self._processed_messages),
             "registered_handlers": len(self._message_handlers),
         }

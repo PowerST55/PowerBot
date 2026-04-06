@@ -6,6 +6,7 @@ import os
 import discord
 
 from backend.managers import store_manager
+from backend.managers import economy_manager
 from backend.managers.economy_manager import apply_balance_delta, get_user_balance_by_id
 from backend.managers.stream_manager import StreamManager
 from backend.managers.user_manager import get_discord_profile_by_discord_id
@@ -384,6 +385,7 @@ async def _finalize_sound_purchase(interaction: discord.Interaction, item_key: s
 			guild_id=guild_id_text,
 			channel_id=channel_id_text,
 			source_id=source_id,
+			system_account=economy_manager.COMMON_FUND_ACCOUNT,
 		)
 	except ValueError:
 		return _insufficient_balance_embed(item_name, total_price, currency_symbol, user_balance)
@@ -405,6 +407,7 @@ async def _finalize_sound_purchase(interaction: discord.Interaction, item_key: s
 				guild_id=guild_id_text,
 				channel_id=channel_id_text,
 				source_id=f"{source_id}:refund",
+				system_account=economy_manager.COMMON_FUND_ACCOUNT,
 			)
 		except Exception:
 			pass

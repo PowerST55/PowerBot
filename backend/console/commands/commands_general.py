@@ -155,6 +155,19 @@ async def cmd_help(ctx: CommandContext) -> None:
 	ctx.print("                   • wsocket        - Alterna ON/OFF")
 	ctx.print("                   • wsocket autorun- Alterna arranque automático")
 	ctx.print("                   • wsocket status - Estado actual")
+	ctx.print("  economy <subcmd>- Gestion del fondo comun y oferta monetaria")
+	ctx.print("                   • economy status                - Resumen economico")
+	ctx.print("                   • economy fondo_comun          - Ver saldo del fondo")
+	ctx.print("                   • economy fondo_comun aps 500  - Agrega 500 al fondo")
+	ctx.print("                   • economy fondo_comun rps 1000 - Remueve 1000 del fondo")
+	ctx.print("                   • economy fondo_casino        - Ver saldo del casino")
+	ctx.print("                   • economy fondo_casino aps 500- Agrega 500 al casino")
+	ctx.print("                   • economy fondo_casino rps 500- Remueve 500 del casino")
+	ctx.print("                   • economy fondo_mina         - Ver saldo de la mina")
+	ctx.print("                   • economy fondo_mina aps 500 - Agrega 500 a la mina")
+	ctx.print("                   • economy fondo_mina rps 500 - Remueve 500 de la mina")
+	ctx.print("                   • economy circulacion          - Pews en circulacion")
+	ctx.print("                   • economy oferta               - Oferta total actual")
 	ctx.print("  discord <subcmd>- Control del bot de Discord")
 	ctx.print("                   • discord        - Alterna ON/OFF")
 	ctx.print("                   • discord on     - Enciende bot de Discord")
@@ -305,6 +318,12 @@ async def cmd_wsocket(ctx: CommandContext) -> None:
 	await cmd_wsocket_impl(ctx)
 
 
+async def cmd_economy(ctx: CommandContext) -> None:
+	"""Comando economy - ejecuta subcomandos para la economia centralizada."""
+	from .economy.general import cmd_economy as cmd_economy_impl
+	await cmd_economy_impl(ctx)
+
+
 async def cmd_discord(ctx: CommandContext) -> None:
 	"""Comando discord - ejecuta subcomandos para controlar el bot de Discord."""
 	from .discord_bot.general import cmd_discord as cmd_discord_impl
@@ -406,6 +425,7 @@ _COMMAND_FUNCTIONS: Dict[str, Callable[[CommandContext], Any]] = {
 	"yapi": cmd_yapi,
 	"web": cmd_web,
 	"store": cmd_store,
+	"economy": cmd_economy,
 	"discord": cmd_discord,
 	"backup": cmd_backup,
 	"livefeed": cmd_livefeed,

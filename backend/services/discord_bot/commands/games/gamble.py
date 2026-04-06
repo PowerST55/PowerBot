@@ -14,6 +14,10 @@ from discord.ext import commands
 from backend.managers import get_or_create_discord_user
 from backend.managers import economy_manager
 from backend.services.activities import gamble_master, games_config, cooldown_manager
+from backend.services.discord_bot.economy.economy_channel import (
+	get_casino_bankruptcy_state,
+	register_casino_bankruptcy,
+)
 from backend.services.discord_bot.config.economy import get_economy_config
 
 
@@ -82,19 +86,47 @@ def setup_gamble_commands(bot: commands.Bot) -> None:
 			await interaction.response.send_message(message, ephemeral=True)
 			return
 
+		casino_fund_balance = economy_manager.get_casino_fund_balance()
+		if casino_fund_balance <= 0:
+			await _send_casino_bankruptcy_error(interaction)
+			return
+
 		await interaction.response.defer()
 
-		roll, ganancia_neta, multiplicador, rango = gamble_master.calculate_gamble_result(bet_amount)
+		roll, ganancia_neta, multiplicador, rango = gamble_master.calculate_gamble_result(
+			bet_amount,
+			casino_fund_balance,
+		)
 
-		# Actualizar cooldown
-		cooldown_manager.update_cooldown(str(interaction.user.id), "gamble")
-
-		new_balance = _apply_balance_delta(
+		settlement = _settle_casino_bet(
 			user_id=user.user_id,
 			delta=ganancia_neta,
 			reason="gamble",
 			interaction=interaction
 		)
+		if not settlement.get("success"):
+			await interaction.followup.send(
+				embed=_build_casino_error_embed(str(settlement.get("error", "No se pudo liquidar la jugada."))),
+				ephemeral=True,
+			)
+			return
+
+		cooldown_manager.update_cooldown(str(interaction.user.id), "gamble")
+
+		new_balance = float(settlement["user_balance"])
+		casino_balance_after = float(settlement["casino_balance_after"])
+
+		if settlement.get("bankruptcy_triggered"):
+			register_casino_bankruptcy(
+				cause_display=interaction.user.mention,
+				cause_platform="discord",
+				cause_user_id=str(interaction.user.id),
+				game_name="gamble",
+				previous_balance=float(settlement["casino_balance_before"]),
+				new_balance=casino_balance_after,
+				bet_amount=bet_amount,
+				net_result=ganancia_neta,
+			)
 
 		summary = gamble_master.get_gamble_summary(
 			username=interaction.user.name,
@@ -153,6 +185,13 @@ def setup_gamble_commands(bot: commands.Bot) -> None:
 			value=f"**{new_balance:,.2f}{currency_symbol}**",
 			inline=True
 		)
+
+		if settlement.get("bankruptcy_triggered"):
+			embed.add_field(
+				name="🚨 Evento crítico",
+				value="Esta jugada dejó al casino en bancarrota. Las mesas quedan cerradas hasta recargar el fondo.",
+				inline=False,
+			)
 
 		embed.set_footer(text=f"Jugador: {interaction.user.name}")
 		embed.timestamp = datetime.now(timezone.utc)
@@ -265,23 +304,45 @@ async def _send_min_limit_error(
 	await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-def _apply_balance_delta(
+def _settle_casino_bet(
 	user_id: int,
 	delta: float,
 	reason: str,
 	interaction: discord.Interaction
-) -> float:
-	return float(
-		economy_manager.apply_balance_delta(
-			user_id=user_id,
-			delta=delta,
-			reason=reason,
-			platform="discord",
-			guild_id=str(interaction.guild_id) if interaction.guild_id else None,
-			channel_id=str(interaction.channel_id) if interaction.channel_id else None,
-			source_id=f"gamble:{interaction.id}",
-		)
+) -> dict:
+	return economy_manager.settle_casino_bet(
+		user_id=user_id,
+		delta=delta,
+		reason=reason,
+		platform="discord",
+		guild_id=str(interaction.guild_id) if interaction.guild_id else None,
+		channel_id=str(interaction.channel_id) if interaction.channel_id else None,
+		source_id=f"gamble:{interaction.id}",
+		allow_negative_casino_fund=True,
 	)
+
+
+def _build_casino_error_embed(error_message: str) -> discord.Embed:
+	return discord.Embed(
+		title="🎰 Operación del casino cancelada",
+		description=error_message,
+		color=discord.Color.red(),
+	)
+
+
+async def _send_casino_bankruptcy_error(interaction: discord.Interaction) -> None:
+	state = get_casino_bankruptcy_state()
+	cause_display = str(state.get("cause_display") or "un jugador")
+	game_name = str(state.get("game_name") or "casino").upper()
+
+	embed = discord.Embed(
+		title="🎰 Casino En Bancarrota",
+		description="El fondo del casino está agotado. Las mesas no aceptan mas apuestas hasta que se recarguen los fondos.",
+		color=discord.Color.red(),
+	)
+	embed.add_field(name="Causa registrada", value=cause_display, inline=False)
+	embed.add_field(name="Último juego", value=game_name, inline=True)
+	await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 def _get_current_balance(user_id: int) -> float:

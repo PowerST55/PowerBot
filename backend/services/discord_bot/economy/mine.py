@@ -14,8 +14,10 @@ from typing import Any
 import discord
 
 from backend.managers import economy_manager, get_or_create_discord_user
+from backend.services.discord_bot.config import get_channels_config
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.config.mine_config import get_mine_config
+from backend.services.discord_bot.economy.economy_channel import register_mine_depleted
 
 
 def _state_file(guild_id: int) -> Path:
@@ -31,10 +33,11 @@ def _load_state(guild_id: int) -> dict[str, Any]:
 				data = json.load(file)
 				if isinstance(data, dict):
 					data.setdefault("cooldowns", {})
+					data.setdefault("mine_depleted_announced", False)
 					return data
 		except Exception:
 			pass
-	return {"cooldowns": {}}
+	return {"cooldowns": {}, "mine_depleted_announced": False}
 
 
 def _save_state(guild_id: int, state: dict[str, Any]) -> None:
@@ -73,6 +76,82 @@ def _format_currency(value: float, currency_symbol: str) -> str:
 
 def _format_probability(value: float) -> str:
 	return f"{_format_value(value, max_decimals=2)}%"
+
+
+def _calculate_mine_ip_amount(user_balance: float, ip_percent: float) -> float:
+	return round(max(0.0, float(user_balance)) * (max(0.0, float(ip_percent)) / 100.0), 2)
+
+
+def _get_mine_fund_balance() -> float:
+	return float(economy_manager.get_mine_fund_balance())
+
+
+def _mine_has_operable_items(items: list[dict[str, Any]], mine_fund_balance: float) -> bool:
+	if mine_fund_balance <= 0:
+		return False
+	for item in items:
+		probability_value = float(item.get("probability", 0) or 0)
+		price_value = float(item.get("price", 0) or 0)
+		if probability_value <= 0:
+			continue
+		if price_value > 0 and price_value > mine_fund_balance:
+			continue
+		return True
+	return False
+
+
+def _set_mine_depleted_announced(guild_id: int, value: bool) -> None:
+	state = _load_state(guild_id)
+	state["mine_depleted_announced"] = bool(value)
+	_save_state(guild_id, state)
+
+
+def _clear_mine_depleted_announcement(guild_id: int) -> None:
+	state = _load_state(guild_id)
+	if state.get("mine_depleted_announced"):
+		state["mine_depleted_announced"] = False
+		_save_state(guild_id, state)
+
+
+def _sync_mine_depleted_state(guild_id: int, items: list[dict[str, Any]] | None = None, mine_fund_balance: float | None = None) -> bool:
+	if items is None:
+		items = get_mine_config(guild_id).list_items()
+	if mine_fund_balance is None:
+		mine_fund_balance = _get_mine_fund_balance()
+	can_operate = _mine_has_operable_items(items, mine_fund_balance)
+	if can_operate:
+		_clear_mine_depleted_announcement(guild_id)
+	return can_operate
+
+
+async def _announce_mine_depleted_if_needed(guild: discord.Guild) -> None:
+	state = _load_state(guild.id)
+	if state.get("mine_depleted_announced"):
+		return
+
+	channels_config = get_channels_config(guild.id)
+	economy_channel_id = channels_config.get_channel("economy_channel")
+	if not economy_channel_id:
+		return
+
+	channel = guild.get_channel(int(economy_channel_id))
+	if not isinstance(channel, discord.TextChannel):
+		return
+
+	embed = discord.Embed(
+		title="⛏️ Mina Agotada",
+		description="La mina se ha quedado sin minerales. Esperando explosivos para ampliar la excavación y reanudar las extracciones.",
+		color=0xC0392B,
+	)
+	embed.add_field(
+		name="Estado",
+		value="Las excavaciones quedan detenidas hasta que vuelva a haber material explotable.",
+		inline=False,
+	)
+	embed.set_footer(text="Economía central • Estado de la mina")
+	register_mine_depleted(guild_id=guild.id, source="depleted")
+	await channel.send(embed=embed)
+	_set_mine_depleted_announced(guild.id, True)
 
 
 def _get_rarity_color(probability: float) -> discord.Color:
@@ -157,6 +236,16 @@ class MineView(discord.ui.View):
 			)
 			return
 
+		mine_fund_balance = _get_mine_fund_balance()
+		mine_is_operable = _sync_mine_depleted_state(interaction.guild.id, items, mine_fund_balance)
+		if not mine_is_operable:
+			await _announce_mine_depleted_if_needed(interaction.guild)
+			await interaction.response.send_message(
+				"⛔ La mina se ha quedado sin minerales.",
+				ephemeral=True,
+			)
+			return
+
 		rate_seconds = mine_config.get_rate_seconds()
 		now_ts = int(time.time())
 		state = _load_state(interaction.guild.id)
@@ -173,14 +262,19 @@ class MineView(discord.ui.View):
 			)
 			return
 
-		valid_items = [
-			item
-			for item in items
-			if float(item.get("probability", 0)) > 0
-		]
+		valid_items = []
+		for item in items:
+			probability_value = float(item.get("probability", 0) or 0)
+			price_value = float(item.get("price", 0) or 0)
+			if probability_value <= 0:
+				continue
+			if price_value > 0 and price_value > mine_fund_balance:
+				continue
+			valid_items.append(item)
 		if not valid_items:
+			await _announce_mine_depleted_if_needed(interaction.guild)
 			await interaction.response.send_message(
-				"Los ítems de mina tienen probabilidades inválidas (deben ser > 0).",
+				"⛔ La mina se ha quedado sin minerales.",
 				ephemeral=True,
 			)
 			return
@@ -191,22 +285,29 @@ class MineView(discord.ui.View):
 		item_name = str(selected.get("name") or "objeto")
 		reward = float(selected.get("price") or 0)
 		probability = float(selected.get("probability") or 0)
+		item_ip_percent = float(selected.get("ip_percent", selected.get("ip%", 0.0)) or 0.0)
 
 		user, _, _ = get_or_create_discord_user(
 			discord_id=str(interaction.user.id),
 			discord_username=interaction.user.name,
 			avatar_url=str(interaction.user.display_avatar.url),
 		)
+		previous_balance = float(economy_manager.get_total_balance(user.user_id))
+		ip_amount = _calculate_mine_ip_amount(previous_balance, item_ip_percent) if reward < 0 else 0.0
+		base_loss = abs(reward) if reward < 0 else 0.0
+		total_delta = reward if reward >= 0 else -min(previous_balance, round(base_loss + ip_amount, 2))
+		actual_loss = abs(total_delta) if total_delta < 0 else 0.0
 
 		new_balance = float(
 			economy_manager.apply_balance_delta(
 				user_id=user.user_id,
-				delta=reward,
+				delta=total_delta,
 				reason="mine_reward",
 				platform="discord",
 				guild_id=str(interaction.guild.id),
 				channel_id=str(interaction.channel_id),
 				source_id=f"mine:{interaction.id}",
+				system_account=economy_manager.MINE_FUND_ACCOUNT,
 			)
 		)
 
@@ -233,15 +334,27 @@ class MineView(discord.ui.View):
 			user_display = f"`ID:{universal_id}` {interaction.user.mention}"
 		else:
 			user_display = f"{interaction.user.mention}"
+		is_bad_item = total_delta < 0
 		notify_embed = discord.Embed(
 			title="⛏️ Registro de mina",
 			description=(
-				f"{user_display} ha conseguido **{item_name}** "
-				f"por **{_format_currency(reward, currency_symbol)}**"
+				(
+					f"{user_display} ha conseguido **{item_name}** "
+					f"por **{_format_currency(reward, currency_symbol)}**"
+					if not is_bad_item
+					else f"{user_display} activó **{item_name}** y perdió **{_format_currency(actual_loss, currency_symbol)}**"
+				)
 			),
 			color=_get_rarity_color(probability),
 		)
 		notify_embed.add_field(name="🎲 Probabilidad", value=f"`{_format_probability(probability)}`", inline=True)
+		if is_bad_item:
+			notify_embed.add_field(name="💥 Penalización base", value=f"`{_format_currency(base_loss, currency_symbol)}`", inline=True)
+			notify_embed.add_field(name="📉 ip% patrimonial", value=f"`{_format_value(item_ip_percent)}%`", inline=True)
+			if item_ip_percent > 0:
+				notify_embed.add_field(name="🧮 Descuento por ip%", value=f"`{_format_currency(ip_amount, currency_symbol)}`", inline=True)
+		else:
+			notify_embed.add_field(name="💎 Recompensa", value=f"`{_format_currency(reward, currency_symbol)}`", inline=True)
 		notify_embed.add_field(
 			name="💰 Balance actual",
 			value=f"`{_format_currency(new_balance, currency_symbol)}`",
@@ -259,6 +372,8 @@ class MineView(discord.ui.View):
 		panel_embed = _build_mine_panel_embed(interaction.guild.id)
 		panel_msg = await interaction.channel.send(embed=panel_embed, view=MineView())
 		_save_panel_location(interaction.guild.id, interaction.channel.id, panel_msg.id)
+		if not _sync_mine_depleted_state(interaction.guild.id):
+			await _announce_mine_depleted_if_needed(interaction.guild)
 		print(f"[MINE] Panel regenerado con botón persistente guild={interaction.guild.id} channel={interaction.channel.id}")
 
 	@staticmethod
@@ -319,14 +434,21 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 	items = mine_config.list_items()
 	rate_seconds = mine_config.get_rate_seconds()
 	configured_channel = mine_config.get_mine_channel_id()
+	mine_fund_balance = _get_mine_fund_balance()
+	mine_is_open = _sync_mine_depleted_state(guild_id, items, mine_fund_balance)
 
 	embed = discord.Embed(
 		title="💎 Powerbot Mina",
-		description="Pulsa el botón para minar un objeto aleatorio según su probabilidad.",
-		color=discord.Color.blurple(),
+		description=(
+			"Pulsa el botón para minar un objeto aleatorio según su probabilidad."
+			if mine_is_open
+			else "La mina se ha quedado sin minerales."
+		),
+		color=discord.Color.blurple() if mine_is_open else discord.Color.red(),
 	)
 	# Cooldown destacado
 	embed.add_field(name="⏱️ Tiempo de espera", value=f"`{_format_seconds(rate_seconds)}` por usuario", inline=True)
+	embed.add_field(name="🔒 Estado", value=("`ABIERTA`" if mine_is_open else "`CERRADA`"), inline=True)
 
 	if items:
 		# Obtener símbolo de moneda
@@ -338,10 +460,11 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 			name = str(item.get("name") or "objeto")
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
-			preview_rows.append(
-				f"• {name} — `{_format_currency(price, currency_symbol)}` | "
-				f"`{_format_probability(prob)}`"
-			)
+			ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0)
+			label = _format_currency(price, currency_symbol)
+			if price < 0 and ip_percent > 0:
+				label = f"-{_format_currency(abs(price), currency_symbol)} + ip { _format_value(ip_percent) }%"
+			preview_rows.append(f"• {name} — `{label}` | `{_format_probability(prob)}`")
 		embed.add_field(name="🪨 Tabla de minerales", value="\n".join(preview_rows), inline=False)
 
 	# Pie: cantidad de minerales disponibles

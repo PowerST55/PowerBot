@@ -72,7 +72,29 @@ async def process_admin_economy_command(
 			await send_chat_message(client, live_chat_id, "La cantidad debe ser un entero mayor a 0.")
 			return True
 
-		new_points = _apply_balance_delta(lookup.user_id, amount, "admin_add_points", message)
+		common_fund_balance = economy_manager.get_common_fund_balance()
+		if float(amount) > common_fund_balance:
+			await send_chat_message(
+				client,
+				live_chat_id,
+				(
+					"❌ El fondo común no tiene saldo suficiente para este APS. "
+					f"Disponible: {common_fund_balance:,.2f}. Solicitado: {amount:,.2f}."
+				),
+			)
+			return True
+
+		try:
+			new_points = _apply_balance_delta(
+				lookup.user_id,
+				amount,
+				"admin_add_points",
+				message,
+				system_account=economy_manager.COMMON_FUND_ACCOUNT,
+			)
+		except ValueError as exc:
+			await send_chat_message(client, live_chat_id, f"❌ {exc}")
+			return True
 		await send_chat_message(
 			client,
 			live_chat_id,
@@ -99,7 +121,13 @@ async def process_admin_economy_command(
 			await send_chat_message(client, live_chat_id, "El usuario no tiene puntos para remover.")
 			return True
 
-		new_points = _apply_balance_delta(lookup.user_id, -amount, "admin_remove_points", message)
+		new_points = _apply_balance_delta(
+			lookup.user_id,
+			-amount,
+			"admin_remove_points",
+			message,
+			system_account=economy_manager.COMMON_FUND_ACCOUNT,
+		)
 		await send_chat_message(
 			client,
 			live_chat_id,
@@ -114,7 +142,26 @@ async def process_admin_economy_command(
 			return True
 
 		delta = amount - current_points
-		new_points = _apply_balance_delta(lookup.user_id, delta, "admin_set_points", message)
+		if delta > 0:
+			common_fund_balance = economy_manager.get_common_fund_balance()
+			if float(delta) > common_fund_balance:
+				await send_chat_message(
+					client,
+					live_chat_id,
+					(
+						"❌ El fondo común no tiene saldo suficiente para este PEWSET. "
+						f"Disponible: {common_fund_balance:,.2f}. Requerido: {delta:,.2f}."
+					),
+				)
+				return True
+
+		new_points = _apply_balance_delta(
+			lookup.user_id,
+			delta,
+			"admin_set_points",
+			message,
+			system_account=economy_manager.COMMON_FUND_ACCOUNT,
+		)
 		await send_chat_message(
 			client,
 			live_chat_id,
@@ -195,13 +242,20 @@ def _format_user_label(lookup: UserLookupResult) -> str:
 	return f"id {lookup.user_id}"
 
 
-def _apply_balance_delta(user_id: int, delta: int, reason: str, message: YouTubeMessage) -> int:
+def _apply_balance_delta(
+	user_id: int,
+	delta: int,
+	reason: str,
+	message: YouTubeMessage,
+	system_account: str | None = None,
+) -> int:
 	new_total = economy_manager.apply_balance_delta(
 		user_id=user_id,
 		delta=float(delta),
 		reason=reason,
 		platform="youtube",
 		source_id=f"yt_admin:{message.id}:{reason}",
+		system_account=system_account,
 	)
 	return int(round(new_total))
 

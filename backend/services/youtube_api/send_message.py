@@ -5,11 +5,44 @@ Implementa reintentos conservadores para evitar duplicados.
 
 import asyncio
 import logging
+import os
 import time
+from collections import defaultdict, deque
+from threading import Lock
 
 from .youtube_core import YouTubeClient
 
 logger = logging.getLogger(__name__)
+
+
+_SEND_LOCK = Lock()
+_CHAT_SEND_TIMESTAMPS = defaultdict(deque)
+_LAST_MESSAGE_BY_CHAT = {}
+_SEND_WINDOW_SEC = float(os.getenv("YT_SEND_WINDOW_SEC", "15"))
+_SEND_MAX_PER_WINDOW = int(os.getenv("YT_SEND_MAX_PER_WINDOW", "12"))
+_SEND_DUPLICATE_COOLDOWN_SEC = float(os.getenv("YT_SEND_DUPLICATE_COOLDOWN_SEC", "4"))
+
+
+def _should_send_message(live_chat_id: str, message: str) -> bool:
+	now = time.monotonic()
+	chat_key = str(live_chat_id)
+	message_key = (chat_key, str(message or "").strip())
+
+	with _SEND_LOCK:
+		last_sent = _LAST_MESSAGE_BY_CHAT.get(message_key)
+		if last_sent is not None and (now - last_sent) < _SEND_DUPLICATE_COOLDOWN_SEC:
+			return False
+
+		timestamps = _CHAT_SEND_TIMESTAMPS[chat_key]
+		while timestamps and (now - timestamps[0]) > _SEND_WINDOW_SEC:
+			timestamps.popleft()
+
+		if len(timestamps) >= _SEND_MAX_PER_WINDOW:
+			return False
+
+		timestamps.append(now)
+		_LAST_MESSAGE_BY_CHAT[message_key] = now
+		return True
 
 
 def send_chat_message_sync(
@@ -33,6 +66,13 @@ def send_chat_message_sync(
 	"""
 	response = None
 	attempt = 0
+
+	if not _should_send_message(live_chat_id, message):
+		logger.warning(
+			"⏱ Mensaje de YouTube omitido por control de rafaga/duplicado (chat=%s)",
+			live_chat_id,
+		)
+		return False
 	
 	while attempt <= max_retries:
 		attempt += 1

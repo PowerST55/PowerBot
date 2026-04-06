@@ -73,9 +73,20 @@ class MineConfig:
 		items = self._config.get("items", [])
 		if not isinstance(items, list):
 			return []
-		return [item for item in items if isinstance(item, dict)]
+		normalized_items: list[dict[str, Any]] = []
+		for item in items:
+			if not isinstance(item, dict):
+				continue
+			normalized_items.append(
+				{
+					**item,
+					"ip%": float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0),
+					"ip_percent": float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0),
+				}
+			)
+		return normalized_items
 
-	def add_item(self, name: str, price: float, probability: int) -> bool:
+	def add_item(self, name: str, price: float, probability: int, ip_percent: float = 0.0) -> bool:
 		normalized_name = str(name).strip()
 		if not normalized_name:
 			return False
@@ -91,6 +102,8 @@ class MineConfig:
 				"name": normalized_name,
 				"price": float(price),
 				"probability": int(probability),
+				"ip%": float(ip_percent or 0.0),
+				"ip_percent": float(ip_percent or 0.0),
 			}
 		)
 		self._config["items"] = items

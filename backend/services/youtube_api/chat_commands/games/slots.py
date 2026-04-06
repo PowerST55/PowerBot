@@ -8,7 +8,11 @@ from typing import List, Optional, TYPE_CHECKING
 
 from backend.managers import economy_manager
 from backend.managers.user_lookup_manager import find_user_by_youtube_channel_id
-from backend.services.activities import cooldown_manager, games_config, slots_master
+from backend.services.activities import cooldown_manager, games_config, slots_master, casino_master
+from backend.services.discord_bot.economy.economy_channel import (
+	get_casino_bankruptcy_state,
+	register_casino_bankruptcy,
+)
 
 from ...config.economy import get_youtube_economy_config
 from ...send_message import send_chat_message
@@ -46,15 +50,21 @@ def _get_current_balance(user_id: int) -> float:
 	return float(economy_manager.get_total_balance(user_id))
 
 
-def _apply_balance_delta(user_id: int, delta: float, reason: str, source_id: str | None) -> float:
-	return float(
-		economy_manager.apply_balance_delta(
-			user_id=user_id,
-			delta=delta,
-			reason=reason,
-			platform="youtube",
-			source_id=source_id,
-		)
+def _is_casino_bankrupt(casino_fund_balance: float) -> bool:
+	state = get_casino_bankruptcy_state()
+	if bool(state.get("is_bankrupt")):
+		return True
+	return float(casino_fund_balance) <= 0
+
+
+def _settle_casino_bet(user_id: int, delta: float, reason: str, source_id: str | None) -> dict:
+	return economy_manager.settle_casino_bet(
+		user_id=user_id,
+		delta=delta,
+		reason=reason,
+		platform="youtube",
+		source_id=source_id,
+		allow_negative_casino_fund=True,
 	)
 
 
@@ -87,7 +97,8 @@ async def process_slots_command(
 		return True
 
 	config = games_config.get_slots_config()
-	limit = float(config.get("limit", 0.0) or 0.0)
+	min_limit = float(config.get("min_limit", 0.0) or 0.0)
+	max_limit = float(config.get("max_limit", 0.0) or 0.0)
 	cooldown_seconds = int(config.get("cooldown", 0) or 0)
 
 	can_play, remaining = cooldown_manager.check_cooldown(
@@ -109,11 +120,19 @@ async def process_slots_command(
 
 	assert bet_amount is not None
 
-	if limit > 0 and bet_amount > limit:
+	if min_limit > 0 and bet_amount < min_limit:
 		await send_chat_message(
 			client,
 			live_chat_id,
-			f"❌ Límite de slots: {int(limit):,}. Intentaste {bet_amount:,}.",
+			f"❌ Límite mínimo de slots: {int(min_limit):,}. Intentaste {bet_amount:,}.",
+		)
+		return True
+
+	if max_limit > 0 and bet_amount > max_limit:
+		await send_chat_message(
+			client,
+			live_chat_id,
+			f"❌ Límite máximo de slots: {int(max_limit):,}. Intentaste {bet_amount:,}.",
 		)
 		return True
 
@@ -122,24 +141,49 @@ async def process_slots_command(
 		await send_chat_message(client, live_chat_id, validation_message)
 		return True
 
-	combo, ganancia_neta, multiplicador, descripcion, es_ganancia, luck_multiplier = slots_master.spin_slots(
+	casino_fund_balance = economy_manager.get_casino_fund_balance()
+	if _is_casino_bankrupt(casino_fund_balance):
+		state = get_casino_bankruptcy_state()
+		cause_display = str(state.get("cause_display") or "un jugador")
+		await send_chat_message(
+			client,
+			live_chat_id,
+			f"🎰 El casino está en bancarrota por causa de {cause_display}. Las tragamonedas siguen fuera de servicio hasta recargar fondo_casino.",
+		)
+		return True
+
+	combo, ganancia_neta, multiplicador, descripcion, es_ganancia, casino_tier = slots_master.spin_slots(
 		bet_amount,
-		str(message.author_channel_id),
+		casino_fund_balance,
 	)
 
-	cooldown_manager.update_cooldown(str(message.author_channel_id), "slots")
-
-	new_balance = _apply_balance_delta(
+	settlement = _settle_casino_bet(
 		user_id=lookup.user_id,
 		delta=float(ganancia_neta),
 		reason="slots",
 		source_id=f"yt_slots:{message.id or message.author_channel_id}:{message.published_at}",
 	)
+	if not settlement.get("success"):
+		await send_chat_message(client, live_chat_id, f"❌ No se pudo liquidar la tirada: {settlement.get('error', 'error desconocido')}")
+		return True
 
-	if es_ganancia:
-		slots_master.reset_user_luck_multiplier(str(message.author_channel_id))
-	else:
-		slots_master.increment_user_luck_multiplier(str(message.author_channel_id), 0.1)
+	cooldown_manager.update_cooldown(str(message.author_channel_id), "slots")
+
+	new_balance = float(settlement["user_balance"])
+	casino_balance_after = float(settlement["casino_balance_after"])
+	casino_tier = casino_master.get_casino_tier(casino_balance_after, bet_amount)
+
+	if settlement.get("bankruptcy_triggered"):
+		register_casino_bankruptcy(
+			cause_display=f"@{message.author_name}",
+			cause_platform="youtube",
+			cause_user_id=str(message.author_channel_id),
+			game_name="slots",
+			previous_balance=float(settlement["casino_balance_before"]),
+			new_balance=casino_balance_after,
+			bet_amount=float(bet_amount),
+			net_result=float(ganancia_neta),
+		)
 
 	economy_config = get_youtube_economy_config()
 	symbol = economy_config.get_currency_symbol()
@@ -151,7 +195,7 @@ async def process_slots_command(
 		multiplicador=multiplicador,
 		descripcion=descripcion,
 		es_ganancia=es_ganancia,
-		luck_multiplier=luck_multiplier,
+		casino_tier=casino_tier,
 		puntos_finales=int(new_balance),
 	)
 

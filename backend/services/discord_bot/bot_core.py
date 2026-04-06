@@ -25,6 +25,12 @@ from backend.services.discord_bot.economy.economy_channel import (
     notify_economy_progress_if_needed,
     pop_external_platform_progress_events,
     notify_external_platform_progress_all_guilds,
+    pop_casino_bankruptcy_events,
+    notify_casino_bankruptcy_all_guilds,
+    process_casino_recovery_cycle,
+    pop_mine_events,
+    notify_mine_status_all_guilds,
+    process_mine_recovery_cycle,
 )
 from backend.services.activities.taxes.taxes_master import collect_due_taxes
 from backend.managers.user_lookup_manager import get_user_platform_ids
@@ -190,6 +196,9 @@ class PowerBotDiscord(commands.Bot):
         """Loop que consume eventos de economía externa (YouTube y otras plataformas)."""
         while not self.is_closed():
             try:
+                await asyncio.to_thread(process_casino_recovery_cycle)
+                await asyncio.to_thread(process_mine_recovery_cycle)
+
                 events = await asyncio.to_thread(pop_external_platform_progress_events, 100)
                 for event in events:
                     platform = str(event.get("platform") or "unknown")
@@ -204,6 +213,14 @@ class PowerBotDiscord(commands.Bot):
                         previous_balance=previous_balance,
                         new_balance=new_balance,
                     )
+
+                casino_events = await asyncio.to_thread(pop_casino_bankruptcy_events, 20)
+                for event in casino_events:
+                    await notify_casino_bankruptcy_all_guilds(self, event)
+
+                mine_events = await asyncio.to_thread(pop_mine_events, 20)
+                for event in mine_events:
+                    await notify_mine_status_all_guilds(self, event)
             except Exception as e:
                 print(f"⚠️ Error en external economy events loop: {e}")
 

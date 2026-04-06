@@ -107,12 +107,29 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 			await _send_error(interaction, error)
 			return
 
-		new_balance = _apply_balance_delta(
+		common_fund_balance = economy_manager.get_common_fund_balance()
+		if amount > common_fund_balance:
+			await _send_error(
+				interaction,
+				(
+					f"El fondo comun no tiene saldo suficiente para este APS. "
+					f"Disponible: {common_fund_balance:.2f}{currency_symbol}. "
+					f"Solicitado: {amount:.2f}{currency_symbol}."
+				),
+			)
+			return
+
+		try:
+			new_balance = _apply_balance_delta(
 			user_id=lookup,
 			delta=amount,
 			reason="admin_add_points",
-			interaction=interaction
+			interaction=interaction,
+			system_account=economy_manager.COMMON_FUND_ACCOUNT,
 		)
+		except ValueError as exc:
+			await _send_error(interaction, str(exc))
+			return
 
 		embed = discord.Embed(
 			title="✅ Puntos agregados",
@@ -173,6 +190,7 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 			reason="admin_remove_points",
 			interaction=interaction,
 			allow_negative_balance=True,
+			system_account=economy_manager.COMMON_FUND_ACCOUNT,
 		)
 
 		embed = discord.Embed(
@@ -235,6 +253,7 @@ def _apply_balance_delta(
 	reason: str,
 	interaction: discord.Interaction,
 	allow_negative_balance: bool = False,
+	system_account: Optional[str] = None,
 ) -> float:
 	return float(
 		economy_manager.apply_balance_delta(
@@ -246,6 +265,7 @@ def _apply_balance_delta(
 			channel_id=str(interaction.channel_id) if interaction.channel_id else None,
 			source_id=f"admin:{interaction.id}",
 			allow_negative_balance=allow_negative_balance,
+			system_account=system_account,
 		)
 	)
 
