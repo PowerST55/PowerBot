@@ -263,20 +263,9 @@ class MineView(discord.ui.View):
 			cooldown_embed = discord.Embed(
 				title="⏳ Mina en cooldown",
 				description=(
-					f"⏳ Debes esperar {_to_discord_timestamp(cooldown_end_ts, 'R')} "
-					"para volver a minar."
+					f" La mina estará disponible {_to_discord_timestamp(cooldown_end_ts, 'R')}."
 				),
 				color=discord.Color.orange(),
-			)
-			cooldown_embed.add_field(
-				name="Disponible de nuevo",
-				value=_to_discord_timestamp(cooldown_end_ts, "R"),
-				inline=False,
-			)
-			cooldown_embed.add_field(
-				name="Hora exacta",
-				value=_to_discord_timestamp(cooldown_end_ts, "F"),
-				inline=False,
 			)
 			cooldown_embed.set_footer(text=f"Cooldown total: {_format_seconds(rate_seconds)}")
 			await interaction.response.send_message(embed=cooldown_embed, ephemeral=True)
