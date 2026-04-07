@@ -22,7 +22,7 @@ class StoreToggleConfigManager:
 
 	def __init__(self, data_dir: Optional[Path] = None):
 		if data_dir is None:
-			backend_dir = Path(__file__).resolve().parents[3]
+			backend_dir = Path(__file__).resolve().parents[2]
 			data_dir = backend_dir / "data" / "store"
 
 		self.data_dir = Path(data_dir)

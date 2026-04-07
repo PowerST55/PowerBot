@@ -2,12 +2,35 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.managers.avatar_manager import AvatarManager
 from backend.managers.economy_manager import get_global_leaderboard
 from backend.managers.user_manager import (
 	get_discord_profile_by_user_id,
 	get_youtube_profile_by_user_id,
 )
 from backend.services.web.config.economy import create_web_economy_manager
+
+
+def _resolve_top_avatar_url(*, discord_profile: Any, youtube_profile: Any) -> str | None:
+	"""Prefiere avatar cacheado localmente para evitar URLs remotas vencidas en web."""
+	if discord_profile:
+		local_avatar = AvatarManager.get_avatar_local_path(str(discord_profile.discord_id), "discord")
+		if local_avatar:
+			return f"/{local_avatar}"
+		if discord_profile.avatar_url:
+			return discord_profile.avatar_url
+
+	if youtube_profile:
+		local_avatar = AvatarManager.get_avatar_local_path(
+			str(youtube_profile.youtube_channel_id),
+			"youtube",
+		)
+		if local_avatar:
+			return f"/{local_avatar}"
+		if youtube_profile.channel_avatar_url:
+			return youtube_profile.channel_avatar_url
+
+	return None
 
 
 def get_top10_payload(limit: int = 10) -> dict[str, Any]:
@@ -36,11 +59,10 @@ def get_top10_payload(limit: int = 10) -> dict[str, Any]:
 		elif youtube_profile and youtube_profile.youtube_username:
 			display_name = youtube_profile.youtube_username
 
-		avatar_url = None
-		if discord_profile and discord_profile.avatar_url:
-			avatar_url = discord_profile.avatar_url
-		elif youtube_profile and youtube_profile.channel_avatar_url:
-			avatar_url = youtube_profile.channel_avatar_url
+		avatar_url = _resolve_top_avatar_url(
+			discord_profile=discord_profile,
+			youtube_profile=youtube_profile,
+		)
 
 		items.append(
 			{

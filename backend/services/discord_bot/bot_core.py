@@ -461,7 +461,7 @@ class PowerBotDiscord(commands.Bot):
             user: discord.User a registrar
         """
         try:
-            avatar_url = str(user.avatar.url) if user.avatar else None
+            avatar_url = str(user.display_avatar.url) if getattr(user, "display_avatar", None) else None
             
             user_obj, discord_profile, is_new = await asyncio.to_thread(
                 get_or_create_discord_user,
