@@ -7,10 +7,13 @@ from discord import app_commands
 from discord.ext import commands
 from typing import Optional
 
+from backend.managers.avatar_manager import AvatarManager
 from backend.managers.user_lookup_manager import find_user_by_discord_id, find_user_by_global_id
 from backend.managers.economy_manager import get_user_balance_by_id
 from backend.managers import inventory_manager
+from backend.managers.user_manager import update_youtube_profile
 from backend.services.discord_bot.commands.economy.user_economy import send_donation_embed
+from backend.services.discord_bot.discord_avatar_packager import DiscordAvatarPackager
 from backend.services.discord_bot.config.roles import get_roles_config
 
 
@@ -227,6 +230,70 @@ def setup_general_commands(bot: commands.Bot) -> None:
 				'youtube_info': youtube_info
 			}
 
+		async def resolve_discord_user(lookup_obj):
+			"""Resuelve el usuario de Discord en tiempo real para refrescar avatar."""
+			if target is not None:
+				return target
+
+			if not lookup_obj or not lookup_obj.has_discord or not lookup_obj.discord_profile:
+				return None
+
+			try:
+				discord_id = int(lookup_obj.discord_profile.discord_id)
+			except (TypeError, ValueError):
+				return None
+
+			if interaction.guild is not None:
+				member = interaction.guild.get_member(discord_id)
+				if member is not None:
+					return member
+
+			cached_user = interaction.client.get_user(discord_id)
+			if cached_user is not None:
+				return cached_user
+
+			try:
+				return await interaction.client.fetch_user(discord_id)
+			except Exception:
+				return None
+
+		async def refresh_avatar_cache(lookup_obj) -> Optional[str]:
+			"""Fuerza descarga/actualización del avatar al consultar /id."""
+			discord_user = await resolve_discord_user(lookup_obj)
+			if discord_user is not None and lookup_obj.discord_profile:
+				fresh_avatar_url = str(discord_user.display_avatar.url)
+				await asyncio.to_thread(
+					DiscordAvatarPackager.download_and_update_avatar,
+					lookup_obj.user_id,
+					str(discord_user.id),
+					fresh_avatar_url,
+				)
+				return fresh_avatar_url
+
+			if lookup_obj.youtube_profile and lookup_obj.youtube_profile.channel_avatar_url:
+				yt_avatar_url = str(lookup_obj.youtube_profile.channel_avatar_url).strip()
+				if yt_avatar_url.startswith('http://') or yt_avatar_url.startswith('https://'):
+					def _refresh_youtube_avatar() -> Optional[str]:
+						cached_avatar = AvatarManager.download_avatar(
+							user_id=str(lookup_obj.youtube_profile.youtube_channel_id),
+							avatar_url_remote=yt_avatar_url,
+							platform="youtube",
+						)
+						if cached_avatar:
+							update_youtube_profile(
+								user_id=lookup_obj.user_id,
+								channel_avatar_url=cached_avatar,
+							)
+						return cached_avatar
+
+					refreshed_yt_avatar = await asyncio.to_thread(_refresh_youtube_avatar)
+					if refreshed_yt_avatar:
+						return refreshed_yt_avatar
+
+				return yt_avatar_url
+
+			return None
+
 		# Ejecutar las operaciones síncronas en un thread para no bloquear el bot
 		loop = asyncio.get_event_loop()
 		
@@ -246,15 +313,10 @@ def setup_general_commands(bot: commands.Bot) -> None:
 		# Cargar info del usuario (TODA la información aquí, sin lazy loading después)
 		user_info = await loop.run_in_executor(None, get_user_info, lookup, target)
 
-		# **AQUÍ en el thread principal: si es búsqueda por ID de Discord, obtener avatar en tiempo real**
-		if target is None and lookup.has_discord and lookup.discord_profile:
-			try:
-				# Obtener usuario de Discord en tiempo real del cache del bot
-				discord_user = interaction.client.get_user(int(lookup.discord_profile.discord_id))
-				if discord_user:
-					user_info['avatar_url'] = str(discord_user.display_avatar.url)
-			except (ValueError, TypeError):
-				pass  # Usar lo que esté en user_info['avatar_url'] (de BD, si existe)
+		# Forzar descarga/actualización del avatar al consultar /id.
+		refreshed_avatar_url = await refresh_avatar_cache(lookup)
+		if refreshed_avatar_url:
+			user_info['avatar_url'] = refreshed_avatar_url
 
 		# Ya NO accedemos a los perfiles en el thread principal, usamos los datos precargados
 		platforms = []
