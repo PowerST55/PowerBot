@@ -15,6 +15,7 @@ backend/data/youtube_bot/active_stream.json para minimizar consultas.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Optional
 
 import discord
@@ -82,11 +83,43 @@ async def _live_stream_loop(bot: discord.Client, interval: int = 60) -> None:
 
 				roles_config = get_roles_config(guild.id)
 				notif_role_id = roles_config.get_role("notifications")
-				mention = f"<@&{notif_role_id}>" if notif_role_id else ""
+				mention = f"<@&{notif_role_id}>" if notif_role_id else None
 
-				message = f"🔴 **{title}**\n{url} {mention}".strip()
+				embed = discord.Embed(
+					title=title,
+					url=url or discord.Embed.Empty,
+					description=(
+						"🔴 **¡Ya estamos en vivo!**\n\n"
+						"Pásate al directo y únete al stream."
+					),
+					color=discord.Color.red(),
+					timestamp=datetime.utcnow(),
+				)
+				embed.set_author(
+					name="PowerBot • Notificación de stream",
+				)
+				embed.add_field(
+					name="Directo",
+					value=f"[Entrar al stream]({url})" if url else "No disponible",
+					inline=False,
+				)
+				embed.add_field(
+					name="Canal de aviso",
+					value=channel.mention,
+					inline=True,
+				)
+				embed.add_field(
+					name="Servidor",
+					value=guild.name,
+					inline=True,
+				)
+				embed.set_footer(text="PowerBot")
 				try:
-					await channel.send(message)
+					await channel.send(
+						content=mention,
+						embed=embed,
+						allowed_mentions=discord.AllowedMentions(roles=True),
+					)
 				except Exception as exc:
 					print(f"⚠️ Error enviando notificación de stream en {guild.name}: {exc}")
 
