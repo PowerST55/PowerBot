@@ -171,21 +171,21 @@ def setup_general_commands(bot: commands.Bot) -> None:
 				return
 
 		try:
-			channel_label = "este chat MD"
-			if interaction.guild is not None and interaction.channel is not None:
-				channel_label = interaction.channel.mention
-
-			confirm_embed = discord.Embed(
-				title="✅ Mensaje enviado",
-				description=f"Tu mensaje ha sido publicado en {channel_label}.",
-				color=discord.Color.green(),
+			message_embed = discord.Embed(
+				description=mensaje,
+				color=discord.Color.blurple(),
 			)
-			await interaction.response.send_message(embed=confirm_embed, ephemeral=True)
-			await interaction.channel.send(mensaje)
+			message_embed.set_author(
+				name="PowerBot",
+				icon_url=interaction.client.user.display_avatar.url if interaction.client.user else None,
+			)
+			message_embed.set_footer(text=f"Solicitado por {interaction.user.display_name}")
+
+			await interaction.response.send_message(embed=message_embed)
 		except discord.Forbidden:
 			embed = discord.Embed(
 				title="❌ Error de permisos",
-				description="El bot no pudo enviar el mensaje en este chat.",
+				description="El bot no pudo publicar el embed en este chat.",
 				color=discord.Color.red(),
 			)
 			if interaction.response.is_done():

@@ -28,42 +28,53 @@ class PPTView(discord.ui.View):
 		self.allowed_user_id = allowed_user_id
 		self.choice = None
 		self.timed_out = False
+		self.message: Optional[discord.Message] = None
+
+	async def _disable_message_view(self):
+		for item in self.children:
+			item.disabled = True
+		if self.message is not None:
+			try:
+				await self.message.edit(view=self)
+			except Exception:
+				pass
+
+	async def _acknowledge_choice(self, interaction: discord.Interaction, choice: str):
+		self.choice = choice
+		for item in self.children:
+			item.disabled = True
+
+		embed = interaction.message.embeds[0].copy() if interaction.message.embeds else discord.Embed(color=0x5865F2)
+		embed.color = 0x57F287
+		embed.add_field(name="✅ Elección registrada", value="Tu jugada quedó guardada. Espera el siguiente paso.", inline=False)
+		await interaction.response.edit_message(embed=embed, view=self)
+		self.stop()
 	
 	async def on_timeout(self):
 		"""Se ejecuta cuando expira el timeout"""
 		self.timed_out = True
-		for item in self.children:
-			item.disabled = True
+		await self._disable_message_view()
 	
 	@discord.ui.button(label="Piedra", emoji="🪨", style=discord.ButtonStyle.primary)
 	async def piedra_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 		if interaction.user.id != self.allowed_user_id:
 			await interaction.response.send_message("❌ No puedes interactuar con este juego.", ephemeral=True)
 			return
-		
-		self.choice = "piedra"
-		await interaction.response.defer()
-		self.stop()
+		await self._acknowledge_choice(interaction, "piedra")
 	
 	@discord.ui.button(label="Papel", emoji="📄", style=discord.ButtonStyle.success)
 	async def papel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 		if interaction.user.id != self.allowed_user_id:
 			await interaction.response.send_message("❌ No puedes interactuar con este juego.", ephemeral=True)
 			return
-		
-		self.choice = "papel"
-		await interaction.response.defer()
-		self.stop()
+		await self._acknowledge_choice(interaction, "papel")
 	
 	@discord.ui.button(label="Tijeras", emoji="✂️", style=discord.ButtonStyle.danger)
 	async def tijeras_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 		if interaction.user.id != self.allowed_user_id:
 			await interaction.response.send_message("❌ No puedes interactuar con este juego.", ephemeral=True)
 			return
-		
-		self.choice = "tijeras"
-		await interaction.response.defer()
-		self.stop()
+		await self._acknowledge_choice(interaction, "tijeras")
 
 
 class PPTRematchView(discord.ui.View):
@@ -76,12 +87,21 @@ class PPTRematchView(discord.ui.View):
 		self.rematch_initiator_id = None  # Quien presiona el botón
 		self.rematch_interaction = None  # Interacción del botón de revancha
 		self.timed_out = False
+		self.message: Optional[discord.Message] = None
+
+	async def _disable_message_view(self):
+		for item in self.children:
+			item.disabled = True
+		if self.message is not None:
+			try:
+				await self.message.edit(view=self)
+			except Exception:
+				pass
 	
 	async def on_timeout(self):
 		"""Se ejecuta cuando expira el timeout"""
 		self.timed_out = True
-		for item in self.children:
-			item.disabled = True
+		await self._disable_message_view()
 	
 	@discord.ui.button(label="Revancha", emoji="🔄", style=discord.ButtonStyle.primary)
 	async def rematch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -93,7 +113,9 @@ class PPTRematchView(discord.ui.View):
 		self.rematch_accepted = True
 		self.rematch_initiator_id = interaction.user.id  # Guardar quien inició la revancha
 		self.rematch_interaction = interaction  # Guardar la interacción del botón
-		await interaction.response.send_message("✅ ¡Revancha aceptada!", ephemeral=True)
+		for item in self.children:
+			item.disabled = True
+		await interaction.response.edit_message(view=self)
 		self.stop()
 
 
@@ -114,11 +136,20 @@ class PPTOpenChallengeView(discord.ui.View):
 		self.opponent: Optional[discord.User] = None
 		self.accept_interaction: Optional[discord.Interaction] = None
 		self.timed_out = False
+		self.message: Optional[discord.Message] = None
+
+	async def _disable_message_view(self):
+		for item in self.children:
+			item.disabled = True
+		if self.message is not None:
+			try:
+				await self.message.edit(view=self)
+			except Exception:
+				pass
 
 	async def on_timeout(self):
 		self.timed_out = True
-		for item in self.children:
-			item.disabled = True
+		await self._disable_message_view()
 
 	@discord.ui.button(label="Aceptar duelo", emoji="⚔️", style=discord.ButtonStyle.primary)
 	async def accept_duel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -166,8 +197,13 @@ class PPTOpenChallengeView(discord.ui.View):
 
 		self.opponent = interaction.user
 		self.accept_interaction = interaction
-		button.disabled = True
-		await interaction.response.send_message("✅ Duelo aceptado. Revisa tu mensaje privado para elegir.", ephemeral=True)
+		for item in self.children:
+			item.disabled = True
+
+		embed = interaction.message.embeds[0].copy() if interaction.message.embeds else discord.Embed(color=0x57F287)
+		embed.color = 0x57F287
+		embed.add_field(name="✅ Duelo tomado", value=f"{interaction.user.mention} aceptó el duelo.", inline=False)
+		await interaction.response.edit_message(embed=embed, view=self)
 		self.stop()
 
 
@@ -182,11 +218,20 @@ class PPTDMChallengeView(discord.ui.View):
 		self.declined = False
 		self.action_interaction: Optional[discord.Interaction] = None
 		self.timed_out = False
+		self.message: Optional[discord.Message] = None
+
+	async def _disable_message_view(self):
+		for item in self.children:
+			item.disabled = True
+		if self.message is not None:
+			try:
+				await self.message.edit(view=self)
+			except Exception:
+				pass
 
 	async def on_timeout(self):
 		self.timed_out = True
-		for item in self.children:
-			item.disabled = True
+		await self._disable_message_view()
 
 	@discord.ui.button(label="Aceptar", emoji="✅", style=discord.ButtonStyle.success)
 	async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -196,7 +241,12 @@ class PPTDMChallengeView(discord.ui.View):
 
 		self.accepted = True
 		self.action_interaction = interaction
-		await interaction.response.defer()
+		for item in self.children:
+			item.disabled = True
+		embed = interaction.message.embeds[0].copy() if interaction.message.embeds else discord.Embed(color=0x57F287)
+		embed.color = 0x57F287
+		embed.add_field(name="✅ Reto aceptado", value="Tu participación quedó confirmada. Ahora elige tu jugada.", inline=False)
+		await interaction.response.edit_message(embed=embed, view=self)
 		self.stop()
 
 	@discord.ui.button(label="Rechazar", emoji="❌", style=discord.ButtonStyle.secondary)
@@ -207,7 +257,12 @@ class PPTDMChallengeView(discord.ui.View):
 
 		self.declined = True
 		self.action_interaction = interaction
-		await interaction.response.defer()
+		for item in self.children:
+			item.disabled = True
+		embed = interaction.message.embeds[0].copy() if interaction.message.embeds else discord.Embed(color=0x95A5A6)
+		embed.color = 0x95A5A6
+		embed.add_field(name="❌ Reto rechazado", value="El duelo fue cancelado en este chat.", inline=False)
+		await interaction.response.edit_message(embed=embed, view=self)
 		self.stop()
 
 
@@ -402,6 +457,8 @@ async def _play_ppt_game_dm(
 	)
 	player1_embed.set_footer(text="⏱️ Tienes 3 minutos para elegir")
 	await interaction.response.send_message(embed=player1_embed, view=view_player1)
+	response_message = await interaction.original_response()
+	view_player1.message = response_message
 
 	await view_player1.wait()
 	if view_player1.timed_out or view_player1.choice is None:
@@ -423,25 +480,16 @@ async def _play_ppt_game_dm(
 	)
 	challenge_embed.set_footer(text="⏱️ El reto expira en 5 minutos")
 	challenge_message = await rival_dm.send(embed=challenge_embed, view=challenge_view)
+	challenge_view.message = challenge_message
 
 	await challenge_view.wait()
 	if challenge_view.timed_out:
-		for item in challenge_view.children:
-			item.disabled = True
-		await challenge_message.edit(view=challenge_view)
 		await interaction.followup.send(f"⏱️ {rival.mention} no respondió a tiempo. El duelo fue cancelado.")
 		return
 
 	if challenge_view.declined:
-		for item in challenge_view.children:
-			item.disabled = True
-		await challenge_message.edit(view=challenge_view)
 		await interaction.followup.send(f"❌ {rival.mention} rechazó el duelo.")
 		return
-
-	for item in challenge_view.children:
-		item.disabled = True
-	await challenge_message.edit(view=challenge_view)
 
 	accept_interaction = challenge_view.action_interaction
 	player2_pick_view = PPTView(allowed_user_id=rival.id, timeout=180)
@@ -456,9 +504,10 @@ async def _play_ppt_game_dm(
 	)
 	player2_pick_embed.set_footer(text="⏱️ Tienes 3 minutos para elegir")
 	if accept_interaction is not None:
-		await accept_interaction.followup.send(embed=player2_pick_embed, view=player2_pick_view)
+		pick_message = await accept_interaction.followup.send(embed=player2_pick_embed, view=player2_pick_view, wait=True)
 	else:
-		await rival_dm.send(embed=player2_pick_embed, view=player2_pick_view)
+		pick_message = await rival_dm.send(embed=player2_pick_embed, view=player2_pick_view)
+	player2_pick_view.message = pick_message
 
 	await interaction.followup.send(f"✅ {rival.mention} aceptó el duelo. Esperando su elección...")
 
@@ -584,9 +633,11 @@ async def play_ppt_game(
 	embed_player1.set_footer(text="⏱️ Tienes 3 minutos para elegir")
 	
 	if is_rematch:
-		await interaction.followup.send(embed=embed_player1, view=view_player1, ephemeral=True)
+		response_message = await interaction.followup.send(embed=embed_player1, view=view_player1, ephemeral=True, wait=True)
 	else:
 		await interaction.response.send_message(embed=embed_player1, view=view_player1, ephemeral=True)
+		response_message = await interaction.original_response()
+	view_player1.message = response_message
 	
 	# Esperar elección del primer jugador
 	await view_player1.wait()
@@ -610,6 +661,7 @@ async def play_ppt_game(
 	
 	# Enviar mensaje público
 	public_message = await interaction.followup.send(embed=embed_player2, view=view_player2, wait=True)
+	view_player2.message = public_message
 	
 	# Esperar elección del segundo jugador
 	await view_player2.wait()
@@ -769,6 +821,7 @@ async def play_ppt_game(
 			inline=False
 		)
 		await public_message.edit(embed=embed_resultado, view=rematch_view)
+		rematch_view.message = public_message
 		
 		# Esperar si aceptan la revancha
 		await rematch_view.wait()
@@ -850,7 +903,7 @@ async def _handle_ppt_command(
 	if interaction.guild is None:
 		if rival is None:
 			await interaction.response.send_message(
-				"❌ En mensajes privados debes indicar un rival para jugar. El duelo abierto solo funciona dentro de servidores.",
+				"❌ En mensajes privados debes indicar un rival. Discord no permite un duelo abierto real en MD porque nadie más puede ver ese reto privado.",
 				ephemeral=True,
 			)
 			return
@@ -911,6 +964,8 @@ async def _handle_ppt_command(
 	creator_pick_embed.set_footer(text="⏱️ Tienes 3 minutos para elegir")
 
 	await interaction.response.send_message(embed=creator_pick_embed, view=creator_pick_view, ephemeral=True)
+	response_message = await interaction.original_response()
+	creator_pick_view.message = response_message
 	await creator_pick_view.wait()
 
 	if creator_pick_view.timed_out or creator_pick_view.choice is None:
@@ -938,6 +993,7 @@ async def _handle_ppt_command(
 	open_embed.set_footer(text="Pulsa 'Aceptar duelo' para entrar")
 
 	public_message = await interaction.followup.send(embed=open_embed, view=open_view, wait=True)
+	open_view.message = public_message
 
 	await open_view.wait()
 
@@ -987,12 +1043,15 @@ async def _handle_ppt_command(
 	opponent_pick_embed.set_footer(text="⏱️ Tienes 3 minutos para elegir")
 
 	if accept_interaction is not None:
-		await accept_interaction.followup.send(embed=opponent_pick_embed, view=opponent_pick_view, ephemeral=True)
+		pick_message = await accept_interaction.followup.send(embed=opponent_pick_embed, view=opponent_pick_view, ephemeral=True, wait=True)
 	else:
 		await interaction.followup.send(
 			f"{opponent.mention}, revisa tus privados para elegir.",
 			ephemeral=True,
 		)
+		pick_message = None
+	if pick_message is not None:
+		opponent_pick_view.message = pick_message
 
 	await public_message.edit(
 		embed=discord.Embed(
@@ -1151,6 +1210,7 @@ async def _handle_ppt_command(
 			inline=False,
 		)
 		result_message = await interaction.followup.send(embed=result_embed, view=rematch_view, wait=True)
+		rematch_view.message = result_message
 
 		await rematch_view.wait()
 		if rematch_view.rematch_accepted and not rematch_view.timed_out:
