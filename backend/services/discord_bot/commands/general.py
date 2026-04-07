@@ -148,6 +148,62 @@ def setup_general_commands(bot: commands.Bot) -> None:
 		await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
 	@bot.tree.command(
+		name="say",
+		description="Envía un mensaje como el bot en MD o, en servidor, solo para mods"
+	)
+	@app_commands.allowed_installs(guilds=True, users=True)
+	@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+	@app_commands.describe(mensaje="El mensaje que enviará el bot")
+	async def say_command(interaction: discord.Interaction, mensaje: str):
+		"""Envía un mensaje como el bot: libre en MD y restringido a mods en servidor."""
+		if interaction.guild is not None:
+			member = interaction.user
+			if not isinstance(member, discord.Member) or not (
+				member.guild_permissions.administrator
+				or member.guild_permissions.moderate_members
+			):
+				embed = discord.Embed(
+					title="❌ Acceso denegado",
+					description="Solo los moderadores pueden usar este comando dentro del servidor.",
+					color=discord.Color.red(),
+				)
+				await interaction.response.send_message(embed=embed, ephemeral=True)
+				return
+
+		try:
+			channel_label = "este chat MD"
+			if interaction.guild is not None and interaction.channel is not None:
+				channel_label = interaction.channel.mention
+
+			confirm_embed = discord.Embed(
+				title="✅ Mensaje enviado",
+				description=f"Tu mensaje ha sido publicado en {channel_label}.",
+				color=discord.Color.green(),
+			)
+			await interaction.response.send_message(embed=confirm_embed, ephemeral=True)
+			await interaction.channel.send(mensaje)
+		except discord.Forbidden:
+			embed = discord.Embed(
+				title="❌ Error de permisos",
+				description="El bot no pudo enviar el mensaje en este chat.",
+				color=discord.Color.red(),
+			)
+			if interaction.response.is_done():
+				await interaction.followup.send(embed=embed, ephemeral=True)
+			else:
+				await interaction.response.send_message(embed=embed, ephemeral=True)
+		except Exception as e:
+			embed = discord.Embed(
+				title="❌ Error",
+				description=f"Ocurrió un error: {str(e)}",
+				color=discord.Color.red(),
+			)
+			if interaction.response.is_done():
+				await interaction.followup.send(embed=embed, ephemeral=True)
+			else:
+				await interaction.response.send_message(embed=embed, ephemeral=True)
+
+	@bot.tree.command(
 		name="id",
 		description="Ver informacion de un usuario por @usuario o ID universal"
 	)

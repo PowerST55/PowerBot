@@ -12,8 +12,13 @@ from discord.ext import commands
 
 from backend.managers import get_or_create_discord_user
 from backend.managers import economy_manager
+from backend.managers.user_lookup_manager import find_user_by_discord_id
 from backend.services.activities import ppt_master
 from backend.services.discord_bot.config.economy import get_economy_config
+
+
+DEFAULT_CURRENCY_NAME = "pews"
+DEFAULT_CURRENCY_SYMBOL = "💎"
 
 
 class PPTView(discord.ui.View):
@@ -166,6 +171,46 @@ class PPTOpenChallengeView(discord.ui.View):
 		self.stop()
 
 
+class PPTDMChallengeView(discord.ui.View):
+	"""Invitación privada para aceptar o rechazar un duelo por MD."""
+
+	def __init__(self, challenger_id: int, rival_id: int, timeout: int = 300):
+		super().__init__(timeout=timeout)
+		self.challenger_id = challenger_id
+		self.rival_id = rival_id
+		self.accepted = False
+		self.declined = False
+		self.action_interaction: Optional[discord.Interaction] = None
+		self.timed_out = False
+
+	async def on_timeout(self):
+		self.timed_out = True
+		for item in self.children:
+			item.disabled = True
+
+	@discord.ui.button(label="Aceptar", emoji="✅", style=discord.ButtonStyle.success)
+	async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+		if interaction.user.id != self.rival_id:
+			await interaction.response.send_message("❌ Este reto no es para ti.", ephemeral=True)
+			return
+
+		self.accepted = True
+		self.action_interaction = interaction
+		await interaction.response.defer()
+		self.stop()
+
+	@discord.ui.button(label="Rechazar", emoji="❌", style=discord.ButtonStyle.secondary)
+	async def reject_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+		if interaction.user.id != self.rival_id:
+			await interaction.response.send_message("❌ Este reto no es para ti.", ephemeral=True)
+			return
+
+		self.declined = True
+		self.action_interaction = interaction
+		await interaction.response.defer()
+		self.stop()
+
+
 def _get_current_balance(user_id: int) -> float:
 	"""Obtiene el balance actual de un usuario"""
 	return float(economy_manager.get_total_balance(user_id))
@@ -199,6 +244,280 @@ def _build_settlement_error_embed(error_message: str) -> discord.Embed:
 		),
 		color=0xFF0000,
 	)
+
+
+def _build_join_server_required_embed() -> discord.Embed:
+	return discord.Embed(
+		title="🔒 Debes unirte a un servidor",
+		description=(
+			"Para jugar Piedra, Papel o Tijeras por MD primero debes estar registrado en la base de datos del bot.\n\n"
+			"Únete a un servidor donde esté PowerBot y usa cualquier comando allí para crear tu perfil antes de jugar por mensaje privado."
+		),
+		color=0xE67E22,
+	)
+
+
+def _resolve_currency_for_interaction(
+	interaction: discord.Interaction,
+	*,
+	rival: Optional[discord.abc.User] = None,
+) -> tuple[str, str]:
+	if interaction.guild is not None:
+		economy_config = get_economy_config(interaction.guild.id)
+		return economy_config.get_currency_name(), economy_config.get_currency_symbol()
+
+	participant_ids = [interaction.user.id]
+	if rival is not None:
+		participant_ids.append(rival.id)
+
+	for guild in interaction.client.guilds:
+		if all(guild.get_member(user_id) is not None for user_id in participant_ids):
+			economy_config = get_economy_config(guild.id)
+			return economy_config.get_currency_name(), economy_config.get_currency_symbol()
+
+	return DEFAULT_CURRENCY_NAME, DEFAULT_CURRENCY_SYMBOL
+
+
+def _get_registered_ppt_player(user: discord.abc.User):
+	return find_user_by_discord_id(str(user.id))
+
+
+def _build_dm_result_embed(
+	*,
+	first_player: discord.abc.User,
+	second_player: discord.abc.User,
+	first_choice: str,
+	second_choice: str,
+	bet_amount: float,
+	currency_symbol: str,
+	winner: int,
+	resultado_texto: str,
+	transfer_result: Optional[dict] = None,
+) -> discord.Embed:
+	emoji1 = ppt_master.get_ppt_emoji(first_choice)
+	emoji2 = ppt_master.get_ppt_emoji(second_choice)
+
+	if winner == 0:
+		embed = discord.Embed(
+			title="🤝 ¡Empate!",
+			description=(
+				f"{first_player.mention} y {second_player.mention} empataron.\n\n"
+				f"{resultado_texto}"
+			),
+			color=0xFEE75C,
+		)
+		embed.add_field(name=f"🎯 {first_player.display_name}", value=f"{emoji1} **{first_choice.capitalize()}**", inline=True)
+		embed.add_field(name=f"🎯 {second_player.display_name}", value=f"{emoji2} **{second_choice.capitalize()}**", inline=True)
+		embed.add_field(
+			name="💰 Resultado",
+			value=f"Cada uno conserva sus **{bet_amount:,.2f}{currency_symbol}**",
+			inline=False,
+		)
+		embed.set_footer(text="PPT • Mensaje privado")
+		return embed
+
+	if winner == 1:
+		winner_player = first_player
+		loser_player = second_player
+	else:
+		winner_player = second_player
+		loser_player = first_player
+
+	embed = discord.Embed(
+		title="🏆 ¡Victoria!",
+		description=(
+			f"{winner_player.mention} ganó el duelo contra {loser_player.mention}.\n\n"
+			f"{resultado_texto}"
+		),
+		color=0x57F287,
+	)
+	embed.add_field(name=f"🎯 {first_player.display_name}", value=f"{emoji1} **{first_choice.capitalize()}**", inline=True)
+	embed.add_field(name=f"🎯 {second_player.display_name}", value=f"{emoji2} **{second_choice.capitalize()}**", inline=True)
+	embed.add_field(
+		name="💰 Recompensa",
+		value=(
+			f"{winner_player.mention} gana **+{bet_amount:,.2f}{currency_symbol}**\n"
+			f"{loser_player.mention} pierde **-{bet_amount:,.2f}{currency_symbol}**"
+		),
+		inline=False,
+	)
+	if transfer_result:
+		winner_balance = float(transfer_result.get("to_balance", 0.0))
+		loser_balance = float(transfer_result.get("from_balance", 0.0))
+		if winner == 1:
+			balance_text = (
+				f"{first_player.mention}: **{winner_balance:,.2f}{currency_symbol}**\n"
+				f"{second_player.mention}: **{loser_balance:,.2f}{currency_symbol}**"
+			)
+		else:
+			balance_text = (
+				f"{second_player.mention}: **{winner_balance:,.2f}{currency_symbol}**\n"
+				f"{first_player.mention}: **{loser_balance:,.2f}{currency_symbol}**"
+			)
+		embed.add_field(name="📊 Balances", value=balance_text, inline=False)
+
+	embed.set_footer(text="PPT • Mensaje privado")
+	return embed
+
+
+async def _play_ppt_game_dm(
+	interaction: discord.Interaction,
+	rival: discord.User,
+	bet_amount: float,
+) -> None:
+	player1_lookup = _get_registered_ppt_player(interaction.user)
+	if not player1_lookup:
+		await interaction.response.send_message(embed=_build_join_server_required_embed(), ephemeral=True)
+		return
+
+	player2_lookup = _get_registered_ppt_player(rival)
+	if not player2_lookup:
+		embed = _build_join_server_required_embed()
+		embed.title = "🔒 Rival no registrado"
+		embed.description = (
+			f"{rival.mention} aún no tiene perfil en la base de datos del bot.\n\n"
+			"Debe unirse a un servidor donde esté PowerBot y usar el bot allí antes de poder jugar por MD."
+		)
+		await interaction.response.send_message(embed=embed, ephemeral=True)
+		return
+
+	_, currency_symbol = _resolve_currency_for_interaction(interaction, rival=rival)
+	player1_points = _get_current_balance(player1_lookup.user_id)
+	player2_points = _get_current_balance(player2_lookup.user_id)
+
+	is_valid, error_message = ppt_master.validate_ppt_game(player1_points, player2_points, bet_amount)
+	if not is_valid:
+		await interaction.response.send_message(error_message, ephemeral=True)
+		return
+
+	view_player1 = PPTView(allowed_user_id=interaction.user.id, timeout=180)
+	player1_embed = discord.Embed(
+		title="🎮 Piedra, Papel o Tijeras",
+		description=(
+			f"**Desafío por MD contra {rival.mention}**\n\n"
+			f"💰 Apuesta: **{bet_amount:,.2f}{currency_symbol}**\n\n"
+			"Tu elección es secreta."
+		),
+		color=0x5865F2,
+	)
+	player1_embed.set_footer(text="⏱️ Tienes 3 minutos para elegir")
+	await interaction.response.send_message(embed=player1_embed, view=view_player1)
+
+	await view_player1.wait()
+	if view_player1.timed_out or view_player1.choice is None:
+		await interaction.followup.send("⏱️ No elegiste a tiempo. El duelo por MD fue cancelado.", ephemeral=True)
+		return
+
+	player1_choice = view_player1.choice
+
+	rival_dm = rival.dm_channel or await rival.create_dm()
+	challenge_view = PPTDMChallengeView(challenger_id=interaction.user.id, rival_id=rival.id, timeout=300)
+	challenge_embed = discord.Embed(
+		title="⚔️ Desafío de PPT por MD",
+		description=(
+			f"{interaction.user.mention} te ha retado a una partida de Piedra, Papel o Tijeras por MD.\n\n"
+			f"💰 Apuesta: **{bet_amount:,.2f}{currency_symbol}**\n"
+			"Pulsa aceptar para jugar o rechazar para cancelar."
+		),
+		color=0x3498DB,
+	)
+	challenge_embed.set_footer(text="⏱️ El reto expira en 5 minutos")
+	challenge_message = await rival_dm.send(embed=challenge_embed, view=challenge_view)
+
+	await challenge_view.wait()
+	if challenge_view.timed_out:
+		for item in challenge_view.children:
+			item.disabled = True
+		await challenge_message.edit(view=challenge_view)
+		await interaction.followup.send(f"⏱️ {rival.mention} no respondió a tiempo. El duelo fue cancelado.")
+		return
+
+	if challenge_view.declined:
+		for item in challenge_view.children:
+			item.disabled = True
+		await challenge_message.edit(view=challenge_view)
+		await interaction.followup.send(f"❌ {rival.mention} rechazó el duelo.")
+		return
+
+	for item in challenge_view.children:
+		item.disabled = True
+	await challenge_message.edit(view=challenge_view)
+
+	accept_interaction = challenge_view.action_interaction
+	player2_pick_view = PPTView(allowed_user_id=rival.id, timeout=180)
+	player2_pick_embed = discord.Embed(
+		title="🎮 Elige tu jugada",
+		description=(
+			f"Aceptaste el duelo de {interaction.user.mention}.\n\n"
+			f"💰 Apuesta: **{bet_amount:,.2f}{currency_symbol}**\n"
+			"Tu elección es secreta."
+		),
+		color=0xFEE75C,
+	)
+	player2_pick_embed.set_footer(text="⏱️ Tienes 3 minutos para elegir")
+	if accept_interaction is not None:
+		await accept_interaction.followup.send(embed=player2_pick_embed, view=player2_pick_view)
+	else:
+		await rival_dm.send(embed=player2_pick_embed, view=player2_pick_view)
+
+	await interaction.followup.send(f"✅ {rival.mention} aceptó el duelo. Esperando su elección...")
+
+	await player2_pick_view.wait()
+	if player2_pick_view.timed_out or player2_pick_view.choice is None:
+		await interaction.followup.send(f"⏱️ {rival.mention} no eligió a tiempo. El duelo fue cancelado.")
+		await rival_dm.send("⏱️ No elegiste a tiempo. El duelo fue cancelado.")
+		return
+
+	player2_choice = player2_pick_view.choice
+
+	player1_points_final = _get_current_balance(player1_lookup.user_id)
+	player2_points_final = _get_current_balance(player2_lookup.user_id)
+	if player1_points_final < bet_amount or player2_points_final < bet_amount:
+		error_embed = discord.Embed(
+			title="❌ Juego Anulado",
+			description="Uno de los jugadores ya no tiene puntos suficientes para continuar.",
+			color=0xFF0000,
+		)
+		await interaction.followup.send(embed=error_embed)
+		await rival_dm.send(embed=error_embed)
+		return
+
+	winner, resultado_texto = ppt_master.determine_ppt_winner(player1_choice, player2_choice)
+	transfer_result = None
+	if winner == 1:
+		transfer_result = _transfer_ppt_bet(
+			loser_user_id=player2_lookup.user_id,
+			winner_user_id=player1_lookup.user_id,
+			amount=bet_amount,
+			interaction=interaction,
+		)
+	elif winner == 2:
+		transfer_result = _transfer_ppt_bet(
+			loser_user_id=player1_lookup.user_id,
+			winner_user_id=player2_lookup.user_id,
+			amount=bet_amount,
+			interaction=interaction,
+		)
+
+	if transfer_result is not None and not transfer_result.get("success"):
+		error_embed = _build_settlement_error_embed(str(transfer_result.get("error", "No se pudo completar la transferencia.")))
+		await interaction.followup.send(embed=error_embed)
+		await rival_dm.send(embed=error_embed)
+		return
+
+	result_embed = _build_dm_result_embed(
+		first_player=interaction.user,
+		second_player=rival,
+		first_choice=player1_choice,
+		second_choice=player2_choice,
+		bet_amount=bet_amount,
+		currency_symbol=currency_symbol,
+		winner=winner,
+		resultado_texto=resultado_texto,
+		transfer_result=transfer_result,
+	)
+	await interaction.followup.send(embed=result_embed)
+	await rival_dm.send(embed=result_embed)
 
 
 async def play_ppt_game(
@@ -481,6 +800,8 @@ def setup_ppt_commands(bot: commands.Bot) -> None:
 	"""Registra comandos de Piedra Papel Tijeras"""
 
 	@bot.tree.command(name="ppt", description="Piedra Papel Tijeras - Juega y apuesta")
+	@app_commands.allowed_installs(guilds=True, users=True)
+	@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 	@app_commands.describe(
 		cantidad="Cantidad a apostar",
 		rival="Usuario rival a desafiar (opcional)"
@@ -494,6 +815,8 @@ def setup_ppt_commands(bot: commands.Bot) -> None:
 		await _handle_ppt_command(interaction, cantidad, rival)
 
 	@bot.tree.command(name="piedra_papel_tijeras", description="Piedra Papel Tijeras - Juega y apuesta")
+	@app_commands.allowed_installs(guilds=True, users=True)
+	@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 	@app_commands.describe(
 		cantidad="Cantidad a apostar",
 		rival="Usuario rival a desafiar (opcional)"
@@ -522,6 +845,23 @@ async def _handle_ppt_command(
 
 	if bet_amount <= 0:
 		await interaction.response.send_message("❌ La cantidad debe ser mayor a 0.", ephemeral=True)
+		return
+
+	if interaction.guild is None:
+		if rival is None:
+			await interaction.response.send_message(
+				"❌ En mensajes privados debes indicar un rival para jugar. El duelo abierto solo funciona dentro de servidores.",
+				ephemeral=True,
+			)
+			return
+		if rival.id == interaction.user.id:
+			await interaction.response.send_message("❌ No puedes jugar contra ti mismo.", ephemeral=True)
+			return
+		if rival.bot:
+			await interaction.response.send_message("❌ No puedes jugar contra bots.", ephemeral=True)
+			return
+
+		await _play_ppt_game_dm(interaction, rival, bet_amount)
 		return
 
 	# Modo duelo directo contra rival especificado

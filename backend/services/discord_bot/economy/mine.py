@@ -62,6 +62,10 @@ def _format_timestamp(prefix: str) -> str:
 	return f"{prefix} • {now}"
 
 
+def _to_discord_timestamp(unix_timestamp: int, style: str = "R") -> str:
+	return f"<t:{int(unix_timestamp)}:{style}>"
+
+
 def _format_value(value: float, max_decimals: int = 2) -> str:
 	formatted = f"{value:,.{max_decimals}f}"
 	if "." in formatted:
@@ -255,11 +259,27 @@ class MineView(discord.ui.View):
 
 		elapsed = now_ts - last_ts
 		if last_ts > 0 and elapsed < rate_seconds:
-			remaining = rate_seconds - elapsed
-			await interaction.response.send_message(
-				f"⏳ Debes esperar `{_format_seconds(remaining)}` para volver a minar.",
-				ephemeral=True,
+			cooldown_end_ts = last_ts + rate_seconds
+			cooldown_embed = discord.Embed(
+				title="⏳ Mina en cooldown",
+				description=(
+					f"⏳ Debes esperar {_to_discord_timestamp(cooldown_end_ts, 'R')} "
+					"para volver a minar."
+				),
+				color=discord.Color.orange(),
 			)
+			cooldown_embed.add_field(
+				name="Disponible de nuevo",
+				value=_to_discord_timestamp(cooldown_end_ts, "R"),
+				inline=False,
+			)
+			cooldown_embed.add_field(
+				name="Hora exacta",
+				value=_to_discord_timestamp(cooldown_end_ts, "F"),
+				inline=False,
+			)
+			cooldown_embed.set_footer(text=f"Cooldown total: {_format_seconds(rate_seconds)}")
+			await interaction.response.send_message(embed=cooldown_embed, ephemeral=True)
 			return
 
 		valid_items = []
@@ -345,14 +365,15 @@ class MineView(discord.ui.View):
 					else f"{user_display} activó **{item_name}** y perdió **{_format_currency(actual_loss, currency_symbol)}**"
 				)
 			),
-			color=_get_rarity_color(probability),
+			color=discord.Color.red() if is_bad_item else _get_rarity_color(probability),
 		)
 		notify_embed.add_field(name="🎲 Probabilidad", value=f"`{_format_probability(probability)}`", inline=True)
 		if is_bad_item:
-			notify_embed.add_field(name="💥 Penalización base", value=f"`{_format_currency(base_loss, currency_symbol)}`", inline=True)
-			notify_embed.add_field(name="📉 ip% patrimonial", value=f"`{_format_value(item_ip_percent)}%`", inline=True)
-			if item_ip_percent > 0:
-				notify_embed.add_field(name="🧮 Descuento por ip%", value=f"`{_format_currency(ip_amount, currency_symbol)}`", inline=True)
+			notify_embed.add_field(
+				name="💥 Pérdida",
+				value=f"`{_format_currency(base_loss, currency_symbol)} - {_format_value(item_ip_percent)} ip%`",
+				inline=True,
+			)
 		else:
 			notify_embed.add_field(name="💎 Recompensa", value=f"`{_format_currency(reward, currency_symbol)}`", inline=True)
 		notify_embed.add_field(
@@ -448,24 +469,38 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 	)
 	# Cooldown destacado
 	embed.add_field(name="⏱️ Tiempo de espera", value=f"`{_format_seconds(rate_seconds)}` por usuario", inline=True)
-	embed.add_field(name="🔒 Estado", value=("`ABIERTA`" if mine_is_open else "`CERRADA`"), inline=True)
 
 	if items:
 		# Obtener símbolo de moneda
 		from backend.services.discord_bot.config.economy import get_economy_config
 		economy_cfg = get_economy_config(guild_id)
 		currency_symbol = economy_cfg.get_currency_symbol()
-		preview_rows = []
+		mineral_rows = []
+		danger_rows = []
 		for item in items[:8]:
 			name = str(item.get("name") or "objeto")
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
-			ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0)
-			label = _format_currency(price, currency_symbol)
-			if price < 0 and ip_percent > 0:
-				label = f"-{_format_currency(abs(price), currency_symbol)} + ip { _format_value(ip_percent) }%"
-			preview_rows.append(f"• {name} — `{label}` | `{_format_probability(prob)}`")
-		embed.add_field(name="🪨 Tabla de minerales", value="\n".join(preview_rows), inline=False)
+			if price < 0:
+				ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0)
+				label = f"-{_format_currency(abs(price), currency_symbol)}"
+				if ip_percent > 0:
+					label = f"{label} + ip {_format_value(ip_percent)}%"
+				danger_rows.append(f"• {name} — `{label}` | `{_format_probability(prob)}`")
+			else:
+				label = _format_currency(price, currency_symbol)
+				mineral_rows.append(f"• {name} — `{label}` | `{_format_probability(prob)}`")
+
+		embed.add_field(
+			name="🪨 Tabla de minerales",
+			value="\n".join(mineral_rows) if mineral_rows else "Sin minerales configurados.",
+			inline=True,
+		)
+		embed.add_field(
+			name="🧨 Tabla de peligros",
+			value="\n".join(danger_rows) if danger_rows else "Sin peligros configurados.",
+			inline=True,
+		)
 
 	# Pie: cantidad de minerales disponibles
 	embed.set_footer(text=f"{len(items)} minerales disponibles")
