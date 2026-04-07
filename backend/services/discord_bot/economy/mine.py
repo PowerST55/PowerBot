@@ -483,12 +483,12 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 		embed.add_field(
 			name="🪨 Tabla de minerales",
 			value="\n".join(mineral_rows) if mineral_rows else "Sin minerales configurados.",
-			inline=True,
+			inline=False,
 		)
 		embed.add_field(
 			name="🧨 Tabla de peligros",
 			value="\n".join(danger_rows) if danger_rows else "Sin peligros configurados.",
-			inline=True,
+			inline=False,
 		)
 
 	# Pie: cantidad de minerales disponibles
