@@ -82,12 +82,21 @@ class MineConfig:
 					**item,
 					"ip%": float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0),
 					"ip_percent": float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0),
+					"custom_text": str(item.get("custom_text", "") or "").strip(),
 				}
 			)
 		return normalized_items
 
-	def add_item(self, name: str, price: float, probability: int, ip_percent: float = 0.0) -> bool:
+	def add_item(
+		self,
+		name: str,
+		price: float,
+		probability: int,
+		ip_percent: float = 0.0,
+		custom_text: str = "",
+	) -> bool:
 		normalized_name = str(name).strip()
+		normalized_custom_text = str(custom_text or "").strip()
 		if not normalized_name:
 			return False
 
@@ -104,6 +113,7 @@ class MineConfig:
 				"probability": int(probability),
 				"ip%": float(ip_percent or 0.0),
 				"ip_percent": float(ip_percent or 0.0),
+				"custom_text": normalized_custom_text,
 			}
 		)
 		self._config["items"] = items

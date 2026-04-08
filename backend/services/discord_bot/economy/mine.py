@@ -295,6 +295,7 @@ class MineView(discord.ui.View):
 		reward = float(selected.get("price") or 0)
 		probability = float(selected.get("probability") or 0)
 		item_ip_percent = float(selected.get("ip_percent", selected.get("ip%", 0.0)) or 0.0)
+		item_custom_text = str(selected.get("custom_text") or "").strip()
 
 		user, _, _ = get_or_create_discord_user(
 			discord_id=str(interaction.user.id),
@@ -344,14 +345,21 @@ class MineView(discord.ui.View):
 		else:
 			user_display = f"{interaction.user.mention}"
 		is_bad_item = total_delta < 0
+		if item_custom_text:
+			item_context = f"{user_display} {item_custom_text} **{item_name}**"
+		else:
+			item_context = (
+				f"{user_display} activó **{item_name}**"
+				if is_bad_item
+				else f"{user_display} ha conseguido **{item_name}**"
+			)
 		notify_embed = discord.Embed(
 			title="⛏️ Registro de mina",
 			description=(
 				(
-					f"{user_display} ha conseguido **{item_name}** "
-					f"por **{_format_currency(reward, currency_symbol)}**"
+					f"{item_context} por **{_format_currency(reward, currency_symbol)}**"
 					if not is_bad_item
-					else f"{user_display} activó **{item_name}** y perdió **{_format_currency(actual_loss, currency_symbol)}**"
+					else f"{item_context} y perdió **{_format_currency(actual_loss, currency_symbol)}**"
 				)
 			),
 			color=discord.Color.red() if is_bad_item else _get_rarity_color(probability),

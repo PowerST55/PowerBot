@@ -48,8 +48,16 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 		price="Valor fijo del ítem. Puede ser negativo para objetos malos",
 		probability="Probabilidad 1-100",
 		ip_percent="Opcional: porcentaje del patrimonio a descontar si el ítem es negativo",
+		custom_text="Opcional: texto personalizado para el mensaje al encontrar este ítem",
 	)
-	async def mine_add(interaction: discord.Interaction, name: str, price: float, probability: int, ip_percent: float = 0.0):
+	async def mine_add(
+		interaction: discord.Interaction,
+		name: str,
+		price: float,
+		probability: int,
+		ip_percent: float = 0.0,
+		custom_text: str = "",
+	):
 		if not interaction.user.guild_permissions.administrator:
 			await _deny_permission(interaction)
 			return
@@ -65,7 +73,13 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 			return
 
 		config = get_mine_config(interaction.guild.id)
-		ok = config.add_item(name=name, price=price, probability=probability, ip_percent=ip_percent)
+		ok = config.add_item(
+			name=name,
+			price=price,
+			probability=probability,
+			ip_percent=ip_percent,
+			custom_text=custom_text,
+		)
 		if not ok:
 			await interaction.response.send_message(
 				f"No se pudo agregar `{name}`. Ya existe o es inválido.",
@@ -81,6 +95,8 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 		embed.add_field(name="Precio", value=f"`{price:,.2f}`", inline=True)
 		embed.add_field(name="Probabilidad", value=f"`{probability}%`", inline=True)
 		embed.add_field(name="ip%", value=f"`{ip_percent:,.2f}%`", inline=True)
+		if custom_text.strip():
+			embed.add_field(name="Texto personalizado", value=f"`{custom_text.strip()}`", inline=False)
 		await interaction.response.send_message(embed=embed, ephemeral=True)
 
 	@mine_group.command(name="remove", description="Elimina ítem de mina (solo admin)")
@@ -116,14 +132,22 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 		)
 
 		if items:
-			rows = [
-				(
-					f"• `{item.get('name')}` → `{float(item.get('price', 0)):,.2f}` | "
+			sorted_items = sorted(
+				items,
+				key=lambda item: float(item.get("probability", 0) or 0),
+				reverse=True,
+			)
+			rows = []
+			for item in sorted_items:
+				custom_text = str(item.get("custom_text") or "").strip()
+				row = (
+					f"• `{item.get('name')}` | `{float(item.get('price', 0)):,.2f}` | "
 					f"`{int(item.get('probability', 0))}%` | "
 					f"`ip {float(item.get('ip_percent', item.get('ip%', 0.0)) or 0.0):,.2f}%`"
 				)
-				for item in items
-			]
+				if custom_text:
+					row = f"{row} | `txt {custom_text}`"
+				rows.append(row)
 			embed.description = "\n".join(rows)
 		else:
 			embed.description = "No hay ítems configurados."
