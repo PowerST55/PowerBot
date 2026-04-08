@@ -464,9 +464,15 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 		from backend.services.discord_bot.config.economy import get_economy_config
 		economy_cfg = get_economy_config(guild_id)
 		currency_symbol = economy_cfg.get_currency_symbol()
+		sorted_items = sorted(
+			items,
+			key=lambda item: float(item.get("probability") or 0),
+			reverse=True,
+		)
+		mineral_count = sum(1 for item in items if float(item.get("price") or 0) >= 0)
 		mineral_rows = []
 		danger_rows = []
-		for item in items[:8]:
+		for item in sorted_items[:8]:
 			name = str(item.get("name") or "objeto")
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
@@ -475,10 +481,10 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 				label = f"-{_format_currency(abs(price), currency_symbol)}"
 				if ip_percent > 0:
 					label = f"{label} + ip {_format_value(ip_percent)}%"
-				danger_rows.append(f"• {name} — `{label}` | `{_format_probability(prob)}`")
+				danger_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
 			else:
 				label = _format_currency(price, currency_symbol)
-				mineral_rows.append(f"• {name} — `{label}` | `{_format_probability(prob)}`")
+				mineral_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
 
 		embed.add_field(
 			name="🪨 Tabla de minerales",
@@ -492,5 +498,5 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 		)
 
 	# Pie: cantidad de minerales disponibles
-	embed.set_footer(text=f"{len(items)} minerales disponibles")
+	embed.set_footer(text=f"{mineral_count if items else 0} minerales disponibles")
 	return embed
