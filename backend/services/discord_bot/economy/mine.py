@@ -428,7 +428,7 @@ async def send_mine_panel(interaction: discord.Interaction) -> None:
 		await interaction.response.send_message("Este comando solo funciona en servidor.", ephemeral=True)
 		return
 
-	mine_config = get_mine_config(interaction.guild.id)
+	mine_config = get_mine_config(interaction.guild.id, force_reload=True)
 	configured_channel = mine_config.get_mine_channel_id()
 	if configured_channel and interaction.channel_id != configured_channel:
 		await interaction.response.send_message(
@@ -445,6 +445,32 @@ async def send_mine_panel(interaction: discord.Interaction) -> None:
 		print(f"[MINE] Panel enviado manualmente y registrado guild={interaction.guild.id} channel={response_msg.channel.id}")
 	except Exception:
 		pass
+
+
+def _add_chunked_table_fields(embed: discord.Embed, title: str, rows: list[str], empty_text: str) -> None:
+	if not rows:
+		embed.add_field(name=title, value=empty_text, inline=False)
+		return
+
+	chunks: list[str] = []
+	current_chunk: list[str] = []
+	current_length = 0
+	for row in rows:
+		row_length = len(row) + (1 if current_chunk else 0)
+		if current_chunk and current_length + row_length > 1024:
+			chunks.append("\n".join(current_chunk))
+			current_chunk = [row]
+			current_length = len(row)
+		else:
+			current_chunk.append(row)
+			current_length += row_length
+
+	if current_chunk:
+		chunks.append("\n".join(current_chunk))
+
+	for index, chunk in enumerate(chunks, start=1):
+		field_name = title if index == 1 else f"{title} ({index})"
+		embed.add_field(name=field_name, value=chunk, inline=False)
 
 
 def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
@@ -472,38 +498,38 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 		from backend.services.discord_bot.config.economy import get_economy_config
 		economy_cfg = get_economy_config(guild_id)
 		currency_symbol = economy_cfg.get_currency_symbol()
-		sorted_items = sorted(
-			items,
+		mineral_items = sorted(
+			[item for item in items if float(item.get("price") or 0) >= 0],
+			key=lambda item: float(item.get("probability") or 0),
+			reverse=True,
+		)
+		danger_items = sorted(
+			[item for item in items if float(item.get("price") or 0) < 0],
 			key=lambda item: float(item.get("probability") or 0),
 			reverse=True,
 		)
 		mineral_count = sum(1 for item in items if float(item.get("price") or 0) >= 0)
 		mineral_rows = []
 		danger_rows = []
-		for item in sorted_items[:8]:
+		for item in mineral_items:
 			name = str(item.get("name") or "objeto")
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
-			if price < 0:
-				ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0)
-				label = f"-{_format_currency(abs(price), currency_symbol)}"
-				if ip_percent > 0:
-					label = f"{label} + ip {_format_value(ip_percent)}%"
-				danger_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
-			else:
-				label = _format_currency(price, currency_symbol)
-				mineral_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
+			label = _format_currency(price, currency_symbol)
+			mineral_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
 
-		embed.add_field(
-			name="🪨 Tabla de minerales",
-			value="\n".join(mineral_rows) if mineral_rows else "Sin minerales configurados.",
-			inline=False,
-		)
-		embed.add_field(
-			name="🧨 Tabla de peligros",
-			value="\n".join(danger_rows) if danger_rows else "Sin peligros configurados.",
-			inline=False,
-		)
+		for item in danger_items:
+			name = str(item.get("name") or "objeto")
+			price = float(item.get("price") or 0)
+			prob = float(item.get("probability") or 0)
+			ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0)
+			label = f"-{_format_currency(abs(price), currency_symbol)}"
+			if ip_percent > 0:
+				label = f"{label} + ip {_format_value(ip_percent)}%"
+			danger_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
+
+		_add_chunked_table_fields(embed, "🪨 Tabla de minerales", mineral_rows, "Sin minerales configurados.")
+		_add_chunked_table_fields(embed, "🧨 Tabla de peligros", danger_rows, "Sin peligros configurados.")
 
 	# Pie: cantidad de minerales disponibles
 	embed.set_footer(text=f"{mineral_count if items else 0} minerales disponibles")

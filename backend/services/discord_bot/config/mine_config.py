@@ -49,6 +49,9 @@ class MineConfig:
 		except Exception as exc:
 			print(f"❌ Error guardando config de mina guild {self.guild_id}: {exc}")
 
+	def reload(self) -> None:
+		self._config = self._load()
+
 	def get_rate_seconds(self) -> int:
 		return int(self._config.get("rate_seconds", 300))
 
@@ -145,18 +148,21 @@ class MineConfigManager:
 	def __init__(self):
 		self._configs: dict[int, MineConfig] = {}
 
-	def get_config(self, guild_id: int) -> MineConfig:
+	def get_config(self, guild_id: int, force_reload: bool = False) -> MineConfig:
 		guild_id = int(guild_id)
 		if guild_id not in self._configs:
 			self._configs[guild_id] = MineConfig(guild_id)
-		return self._configs[guild_id]
+		config = self._configs[guild_id]
+		if force_reload:
+			config.reload()
+		return config
 
 
 _mine_config_manager: MineConfigManager | None = None
 
 
-def get_mine_config(guild_id: int) -> MineConfig:
+def get_mine_config(guild_id: int, force_reload: bool = False) -> MineConfig:
 	global _mine_config_manager
 	if _mine_config_manager is None:
 		_mine_config_manager = MineConfigManager()
-	return _mine_config_manager.get_config(guild_id)
+	return _mine_config_manager.get_config(guild_id, force_reload=force_reload)
