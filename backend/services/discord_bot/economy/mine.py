@@ -516,7 +516,7 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
 			label = _format_currency(price, currency_symbol)
-			mineral_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
+			mineral_rows.append(f"• `{name} | {label} | {_format_probability(prob)}`")
 
 		for item in danger_items:
 			name = str(item.get("name") or "objeto")
@@ -526,7 +526,7 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 			label = f"-{_format_currency(abs(price), currency_symbol)}"
 			if ip_percent > 0:
 				label = f"{label} + ip {_format_value(ip_percent)}%"
-			danger_rows.append(f"• {name} | {label} | {_format_probability(prob)}")
+			danger_rows.append(f"• `{name} | {label} | {_format_probability(prob)}`")
 
 		_add_chunked_table_fields(embed, "🪨 Tabla de minerales", mineral_rows, "Sin minerales configurados.")
 		_add_chunked_table_fields(embed, "🧨 Tabla de peligros", danger_rows, "Sin peligros configurados.")
