@@ -242,13 +242,13 @@ def _load_item_config(item_folder: Path, internal_ids_map: Dict[str, str]) -> tu
 			return None, f"{item_key}: falta video (requerido para keycode)"
 		# Keycodes NO deben tener audio
 		keycodes = metadata.get("keycodes", [])
-		if not isinstance(keycodes, list) or len(keycodes) == 0:
-			return None, f"{item_key}: metadata.keycodes debe ser un array no vacío"
+		if not isinstance(keycodes, list):
+			return None, f"{item_key}: metadata.keycodes debe ser un array"
 		# Validar que cada keycode sea string no vacío
 		for idx, code in enumerate(keycodes):
 			if not isinstance(code, str) or not code.strip():
 				return None, f"{item_key}: keycode en índice {idx} es inválido"
-		# La quantity debe ser igual al de keycodes
+		# La quantity debe ser igual al total de keycodes (puede ser 0 cuando está agotado).
 		if quantity != len(keycodes):
 			quantity = len(keycodes)
 

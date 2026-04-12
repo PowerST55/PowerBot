@@ -435,7 +435,7 @@ async def _log_keycode_sale_for_moderation(
 		"Internal ID": internal_id or "N/A",
 		"Precio": f"{_format_points(price_paid)} {currency_symbol}",
 		"Saldo restante": f"{_format_points(balance_after)} {currency_symbol}",
-		"Código (censurado)": _censor_keycode(keycode),
+		"Código ": _censor_keycode(keycode),
 		"DM entregado": "sí" if dm_sent else "no",
 		"Stock keycodes restante": str(remaining_codes),
 	}
