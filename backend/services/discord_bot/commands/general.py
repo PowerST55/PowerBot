@@ -149,59 +149,31 @@ def setup_general_commands(bot: commands.Bot) -> None:
 
 	@bot.tree.command(
 		name="say",
-		description="Envía un mensaje como el bot en MD o, en servidor, solo para mods"
+		description="Envía un mensaje simple como respuesta (solo DM)"
 	)
-	@app_commands.allowed_installs(guilds=True, users=True)
-	@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+	@app_commands.allowed_installs(guilds=False, users=True)
+	@app_commands.allowed_contexts(guilds=False, dms=True, private_channels=True)
 	@app_commands.describe(mensaje="El mensaje que enviará el bot")
 	async def say_command(interaction: discord.Interaction, mensaje: str):
-		"""Envía un mensaje como el bot: libre en MD y restringido a mods en servidor."""
+		"""Envía texto plano como respuesta al comando. Disponible solo por DM."""
 		if interaction.guild is not None:
-			member = interaction.user
-			if not isinstance(member, discord.Member) or not (
-				member.guild_permissions.administrator
-				or member.guild_permissions.moderate_members
-			):
-				embed = discord.Embed(
-					title="❌ Acceso denegado",
-					description="Solo los moderadores pueden usar este comando dentro del servidor.",
-					color=discord.Color.red(),
-				)
-				await interaction.response.send_message(embed=embed, ephemeral=True)
-				return
+			await interaction.response.send_message("Este comando solo está disponible en DM.", ephemeral=True)
+			return
 
 		try:
-			message_embed = discord.Embed(
-				description=mensaje,
-				color=discord.Color.blurple(),
-			)
-			message_embed.set_author(
-				name="PowerBot",
-				icon_url=interaction.client.user.display_avatar.url if interaction.client.user else None,
-			)
-			message_embed.set_footer(text=f"Solicitado por {interaction.user.display_name}")
-
-			await interaction.response.send_message(embed=message_embed)
+			# Respuesta de texto puro, sin embed ni decoración.
+			await interaction.response.send_message(mensaje)
 		except discord.Forbidden:
-			embed = discord.Embed(
-				title="❌ Error de permisos",
-				description="El bot no pudo publicar el embed en este chat.",
-				color=discord.Color.red(),
-			)
 			if interaction.response.is_done():
-				await interaction.followup.send(embed=embed, ephemeral=True)
+				await interaction.followup.send("No pude enviar el mensaje en este chat.", ephemeral=True)
 			else:
-				await interaction.response.send_message(embed=embed, ephemeral=True)
+				await interaction.response.send_message("No pude enviar el mensaje en este chat.", ephemeral=True)
 		except Exception as e:
-			embed = discord.Embed(
-				title="❌ Error",
-				description=f"Ocurrió un error: {str(e)}",
-				color=discord.Color.red(),
-			)
+			error_text = f"Ocurrió un error: {str(e)}"
 			if interaction.response.is_done():
-				await interaction.followup.send(embed=embed, ephemeral=True)
+				await interaction.followup.send(error_text, ephemeral=True)
 			else:
-				await interaction.response.send_message(embed=embed, ephemeral=True)
+				await interaction.response.send_message(error_text, ephemeral=True)
 
 	@bot.tree.command(
 		name="id",

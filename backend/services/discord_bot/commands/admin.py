@@ -13,6 +13,47 @@ from backend.services.discord_bot.bot_logging import log_info, log_success
 
 def setup_admin_commands(bot: commands.Bot):
     """Registra comandos de administración"""
+
+    admin_group = app_commands.Group(name="admin", description="Comandos administrativos")
+
+    @admin_group.command(name="say", description="Publica un mensaje de texto plano en este canal")
+    @app_commands.allowed_installs(guilds=True, users=False)
+    @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
+    @app_commands.describe(mensaje="Texto que publicará el bot")
+    async def admin_say(interaction: discord.Interaction, mensaje: str):
+        """Comando de servidor: envía texto suelto en el canal sin firma del usuario."""
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Este comando solo se puede usar en servidor.", ephemeral=True)
+            return
+
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "Solo los administradores pueden usar este comando.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            await interaction.response.send_message(
+                "Este canal no admite mensajes de texto del bot.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await channel.send(str(mensaje))
+            await interaction.response.send_message("Mensaje enviado.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "No tengo permisos para enviar mensajes en este canal.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"Error al enviar mensaje: {e}",
+                ephemeral=True,
+            )
     
     @bot.tree.command(name="setprefix", description="Cambia el prefix del bot (solo admin)")
     @app_commands.describe(prefix="El nuevo prefix (ej: !, ?, >)")
@@ -617,6 +658,7 @@ def setup_admin_commands(bot: commands.Bot):
             await interaction.response.send_message(embed=embed, ephemeral=True)
     
     bot.tree.add_command(set_group)
+    bot.tree.add_command(admin_group)
     
     @bot.tree.command(name="clean", description="Limpia configuración guardada")
     @app_commands.describe(tipo="Qué configuración deseas limpiar")

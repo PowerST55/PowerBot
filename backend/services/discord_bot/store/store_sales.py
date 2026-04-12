@@ -10,6 +10,7 @@ from backend.managers import economy_manager
 from backend.managers.economy_manager import apply_balance_delta, get_user_balance_by_id
 from backend.managers.stream_manager import StreamManager
 from backend.managers.user_manager import get_discord_profile_by_discord_id
+from backend.services.discord_bot.bot_logging import log_economy
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.events_websocket.livefeed import notifications as ws_notifications
 from backend.services.store.config.cooldown import create_store_cooldown_manager
@@ -395,6 +396,63 @@ async def _send_keycode_purchase_notification(
 	)
 
 
+def _censor_keycode(keycode: str) -> str:
+	"""Censura keycode para logs públicos/moderación."""
+	code = str(keycode or "")
+	if not code:
+		return "(vacío)"
+	if len(code) <= 8:
+		return "*" * len(code)
+	return f"{code[:5]}{'*' * max(0, len(code) - 8)}{code[-3:]}"
+
+
+async def _log_keycode_sale_for_moderation(
+	interaction: discord.Interaction,
+	item: dict,
+	keycode: str,
+	*,
+	price_paid: float,
+	currency_symbol: str,
+	balance_after: float,
+	dm_sent: bool,
+) -> None:
+	"""Registra venta de keycode en canal de logs para revisión antifraude."""
+	if interaction.guild is None:
+		return
+
+	bot_client = interaction.client
+	item_key = str(item.get("item_key") or "")
+	internal_id = str(item.get("internal_id") or "").upper()
+	item_name = str(item.get("nombre") or item_key)
+	metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+	remaining_codes = len(metadata.get("keycodes") or []) if isinstance(metadata.get("keycodes"), list) else "?"
+
+	fields = {
+		"Usuario": f"{interaction.user} ({interaction.user.id})",
+		"Canal": f"{interaction.channel.mention}" if interaction.channel else "N/A",
+		"Item": item_name,
+		"Item Key": item_key,
+		"Internal ID": internal_id or "N/A",
+		"Precio": f"{_format_points(price_paid)} {currency_symbol}",
+		"Saldo restante": f"{_format_points(balance_after)} {currency_symbol}",
+		"Código (censurado)": _censor_keycode(keycode),
+		"DM entregado": "sí" if dm_sent else "no",
+		"Stock keycodes restante": str(remaining_codes),
+	}
+
+	try:
+		await log_economy(
+			bot=bot_client,
+			guild_id=int(interaction.guild.id),
+			title="Venta de keycode en tienda",
+			description="Se registró una venta de keycode para auditoría de moderación.",
+			fields=fields,
+			user=interaction.user,
+		)
+	except Exception as exc:
+		print(f"[KEYCODE][LOG] Error enviando log de venta: {exc}")
+
+
 async def _finalize_keycode_purchase(interaction: discord.Interaction, item_key: str) -> discord.Embed:
 	"""Completa compra real de item keycode: cobro, stock, envío DM y broadcast."""
 	toggle_manager = create_store_toggle_manager()
@@ -509,6 +567,7 @@ async def _finalize_keycode_purchase(interaction: discord.Interaction, item_key:
 		return _purchase_error_embed("No se pudo obtener un código válido. Por favor, inténtalo de nuevo.")
 
 	# Enviar el código por DM al usuario
+	dm_sent = False
 	try:
 		dm_sent = await _send_keycode_via_dm(interaction.user, consumed_keycode, item_name)
 		if not dm_sent:
@@ -526,6 +585,15 @@ async def _finalize_keycode_purchase(interaction: discord.Interaction, item_key:
 
 	await _sync_store_item_post(interaction=interaction, item=item)
 	await _send_keycode_purchase_notification(interaction=interaction, item=item, keycode=consumed_keycode)
+	await _log_keycode_sale_for_moderation(
+		interaction=interaction,
+		item=item,
+		keycode=consumed_keycode,
+		price_paid=total_price,
+		currency_symbol=currency_symbol,
+		balance_after=float(balance_after),
+		dm_sent=dm_sent,
+	)
 
 	return _purchase_success_embed(
 		item_name=item_name,
