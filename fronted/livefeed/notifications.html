@@ -123,8 +123,8 @@
             try {
                 const parsed = new URL(urlValue, window.location.origin);
                 if (["127.0.0.1", "localhost", "0.0.0.0"].includes(parsed.hostname)) {
-                    parsed.protocol = window.location.protocol;
-                    parsed.host = window.location.host;
+                    // Evitar depender de host/puerto loopback del backend; usar ruta relativa del front actual.
+                    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
                 }
                 return parsed.toString();
             } catch (_error) {
@@ -227,7 +227,17 @@
         }
 
         async function resolveAudioPath(notifId, config = {}, data = {}) {
-            // 1. Si viene explícitamente en el payload, usarlo (para sonidos Discord puede enviar audio_path)
+            // Para notificaciones store (sound/keycode), siempre usar audio del video.
+            const isStoreNotification = Boolean(data.storeInternalId) || String(data.source || '').includes('store');
+            if (isStoreNotification && (data.videoPath || data.video)) {
+                const storeVideoAudioPath = toMediaUrl(data.videoPath || data.video, notifId);
+                if (storeVideoAudioPath) {
+                    mediaPathCache.audio[notifId] = storeVideoAudioPath;
+                    return storeVideoAudioPath;
+                }
+            }
+
+            // 1. Si viene explícitamente en el payload, usarlo.
             if (data.audioPath) {
                 return toMediaUrl(data.audioPath, notifId);
             }
@@ -239,8 +249,9 @@
             // 2. Si NO hay audio configurado en el item pero SÍ hay video, usar audio del video
             if (!config.audio && data.videoPath) {
                 // El video ya contiene audio, lo extraerá el navegador
-                mediaPathCache.audio[notifId] = data.videoPath;
-                return data.videoPath;
+                const videoAsAudioPath = toMediaUrl(data.videoPath, notifId);
+                mediaPathCache.audio[notifId] = videoAsAudioPath;
+                return videoAsAudioPath;
             }
 
             // 3. Si hay audio explícito en config, buscarlo (fallback para items sound)
@@ -254,8 +265,9 @@
                 
                 // Si no encontró audio.mp3 pero hay video, caer a audio del video
                 if (data.videoPath) {
-                    mediaPathCache.audio[notifId] = data.videoPath;
-                    return data.videoPath;
+                    const fallbackVideoAudioPath = toMediaUrl(data.videoPath, notifId);
+                    mediaPathCache.audio[notifId] = fallbackVideoAudioPath;
+                    return fallbackVideoAudioPath;
                 }
             }
 
@@ -538,11 +550,16 @@
                 return new Promise((resolve) => {
                     let settled = false;
                     let fallbackTimeoutId = null;
+                    let canPlayThroughTimeoutId = null;
 
                     const cleanupCommon = () => {
                         if (fallbackTimeoutId) {
                             clearTimeout(fallbackTimeoutId);
                             fallbackTimeoutId = null;
+                        }
+                        if (canPlayThroughTimeoutId) {
+                            clearTimeout(canPlayThroughTimeoutId);
+                            canPlayThroughTimeoutId = null;
                         }
                         videoElement.removeEventListener('canplaythrough', handleCanPlayThrough);
                         videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -610,18 +627,12 @@
                     };
 
                     // Fallback: si canplaythrough no llega en 10 segundos, reproducir de todas formas
-                    const canPlayThroughTimeout = setTimeout(() => {
+                    canPlayThroughTimeoutId = setTimeout(() => {
                         if (!settled && videoElement.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
                             console.warn('⚠ canplaythrough timeout, reproduciendo con datos cargados...');
                             handleCanPlayThrough();
                         }
                     }, 10000);
-
-                    const originalSettle = settle;
-                    settle = (value) => {
-                        clearTimeout(canPlayThroughTimeout);
-                        originalSettle(value);
-                    };
 
                     videoElement.addEventListener('canplaythrough', handleCanPlayThrough, { once: true });
                     videoElement.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });

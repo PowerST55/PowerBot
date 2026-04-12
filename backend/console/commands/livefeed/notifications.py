@@ -119,7 +119,6 @@ async def cmd_ntf(ctx: Any) -> None:
 		return
 
 	video_url = _public_asset_url(item.get("video"))
-	audio_url = _public_asset_url(item.get("audio"))
 	if not video_url:
 		ctx.error(f"El item '{item_name}' no tiene video configurado")
 		return
@@ -129,7 +128,7 @@ async def cmd_ntf(ctx: Any) -> None:
 		internal_id=internal_id,
 		item_name=item_name,
 		video_path=video_url,
-		audio_path=audio_url or None,
+		audio_path=None,
 	)
 
 	if not ok:
@@ -139,6 +138,5 @@ async def cmd_ntf(ctx: Any) -> None:
 
 	ctx.success(f"Notificación store simulada enviada: {internal_id or item_key} ({item_name})")
 	ctx.print(f"Video enviado: {video_url}")
-	if audio_url:
-		ctx.print(f"Audio enviado: {audio_url}")
+	ctx.print("Audio en navegador: se extrae desde el video.mp4")
 	ctx.print("Abre notifications.html en livefeed para ver la reproducción")

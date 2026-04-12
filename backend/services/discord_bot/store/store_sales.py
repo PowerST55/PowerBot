@@ -307,7 +307,6 @@ async def _send_sound_purchase_notification(
 	if not video_url:
 		return False
 
-	audio_url = _public_asset_url(item.get("audio"))
 	item_key = str(item.get("item_key") or "")
 	internal_id = str(item.get("internal_id") or "").upper()
 	item_name = str(item.get("nombre") or item_key)
@@ -318,7 +317,7 @@ async def _send_sound_purchase_notification(
 		internal_id=internal_id,
 		item_name=item_name,
 		video_path=video_url,
-		audio_path=audio_url or None,
+		audio_path=None,
 		title_text="Compra en tienda",
 		message_text=message_text,
 		simulation=False,
