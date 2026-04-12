@@ -143,7 +143,7 @@ def setup_mine_commands(bot: commands.Bot) -> None:
 				row = (
 					f"• `{item.get('name')} | {float(item.get('price', 0)):,.2f} | "
 					f"{int(item.get('probability', 0))}% | "
-					f"ip {float(item.get('ip_percent', item.get('ip%', 0.0)) or 0.0):,.2f}%"
+					f"ip {float(item.get('ip%', item.get('ip_percent', 0.0)) or 0.0):,.2f}%"
 				)
 				if custom_text:
 					row = f"{row} | txt {custom_text}`"

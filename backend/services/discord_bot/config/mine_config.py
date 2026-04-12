@@ -80,11 +80,11 @@ class MineConfig:
 		for item in items:
 			if not isinstance(item, dict):
 				continue
+			normalized_item = {key: value for key, value in item.items() if key != "ip_percent"}
 			normalized_items.append(
 				{
-					**item,
-					"ip%": float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0),
-					"ip_percent": float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0),
+					**normalized_item,
+					"ip%": float(item.get("ip%", item.get("ip_percent", 0.0)) or 0.0),
 					"custom_text": str(item.get("custom_text", "") or "").strip(),
 				}
 			)
@@ -115,7 +115,6 @@ class MineConfig:
 				"price": float(price),
 				"probability": int(probability),
 				"ip%": float(ip_percent or 0.0),
-				"ip_percent": float(ip_percent or 0.0),
 				"custom_text": normalized_custom_text,
 			}
 		)

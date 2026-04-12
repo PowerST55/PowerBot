@@ -162,6 +162,8 @@ def _normalize_item_category(item: dict) -> str:
 		return "sound"
 	if raw in {"card", "cards", "carrd"}:
 		return "card"
+	if raw in {"keycode", "key", "code"}:
+		return "keycode"
 	return raw
 
 
@@ -230,12 +232,13 @@ def _get_user_price(item: dict, user_id: int) -> float | None:
 
 
 class StorePurchaseConfirmView(discord.ui.View):
-	"""Confirmación ephemeral para compras de items sound."""
+	"""Confirmación ephemeral para compras de items sound y keycode."""
 
-	def __init__(self, *, item_key: str, buyer_discord_id: int, timeout: float = 45.0):
+	def __init__(self, *, item_key: str, buyer_discord_id: int, item_category: str = "sound", timeout: float = 45.0):
 		super().__init__(timeout=timeout)
 		self.item_key = str(item_key)
 		self.buyer_discord_id = int(buyer_discord_id)
+		self.item_category = str(item_category).lower()
 
 	async def _reject_other_user(self, interaction: discord.Interaction) -> bool:
 		if int(interaction.user.id) == self.buyer_discord_id:
@@ -259,7 +262,10 @@ class StorePurchaseConfirmView(discord.ui.View):
 		# (DB, sync de foro y notificación websocket).
 		await interaction.response.defer()
 		try:
-			embed = await _finalize_sound_purchase(interaction=interaction, item_key=self.item_key)
+			if self.item_category == "keycode":
+				embed = await _finalize_keycode_purchase(interaction=interaction, item_key=self.item_key)
+			else:
+				embed = await _finalize_sound_purchase(interaction=interaction, item_key=self.item_key)
 		except Exception:
 			embed = _purchase_error_embed("Ocurrió un error interno procesando la compra. Inténtalo de nuevo.")
 
@@ -317,6 +323,216 @@ async def _send_sound_purchase_notification(
 		message_text=message_text,
 		simulation=False,
 		source="discord_store_purchase",
+	)
+
+
+def _stream_required_for_keycode_embed() -> discord.Embed:
+	return discord.Embed(
+		title="📡 Stream requerido",
+		description=(
+			"Este código requiere stream activo para ser canjeado.\n"
+			"Para solicitar stream usa **`/stream`**."
+		),
+		color=discord.Color.orange(),
+	)
+
+
+async def _send_keycode_via_dm(user: discord.User, keycode: str, item_name: str) -> bool:
+	"""Envía el código por DM al usuario."""
+	try:
+		dm_channel = await user.create_dm()
+		embed = discord.Embed(
+			title="🔑 Código canjeado",
+			description=f"Has comprado **{item_name}**",
+			color=discord.Color.gold(),
+		)
+		embed.add_field(
+			name="Tu código (uso único)",
+			value=f"```{keycode}```",
+			inline=False,
+		)
+		embed.add_field(
+			name="⚠️ Importante",
+			value="Este código es de uso único y personal. No lo compartas.",
+			inline=False,
+		)
+		embed.set_footer(text="Guarda este código en un lugar seguro.")
+		
+		await dm_channel.send(embed=embed)
+		return True
+	except Exception as exc:
+		print(f"[KEYCODE] Error enviando DM a {user.id}: {exc}")
+		return False
+
+
+async def _send_keycode_purchase_notification(
+	interaction: discord.Interaction,
+	item: dict,
+	keycode: str,
+) -> bool:
+	"""Envía notificación de compra de keycode, censurando el código."""
+	video_url = _public_asset_url(item.get("video"))
+	if not video_url:
+		return False
+
+	item_key = str(item.get("item_key") or "")
+	internal_id = str(item.get("internal_id") or "").upper()
+	item_name = str(item.get("nombre") or item_key)
+
+	# Censurar el código en el mensaje público (solo mostrar primeros 5 y últimos 3 caracteres)
+	censored_code = f"{keycode[:5]}{'*' * max(0, len(keycode) - 8)}{keycode[-3:]}" if len(keycode) > 8 else "*" * len(keycode)
+	message_text = f"{interaction.user.display_name} canjeó {item_name} (código: {censored_code})"
+
+	return await ws_notifications.send_store_sound_notification(
+		notification_id=item_key,
+		internal_id=internal_id,
+		item_name=item_name,
+		video_path=video_url,
+		audio_path=None,  # Keycodes no tienen audio
+		title_text="Keycode canjeado",
+		message_text=message_text,
+		simulation=False,
+		source="discord_keycode_purchase",
+	)
+
+
+async def _finalize_keycode_purchase(interaction: discord.Interaction, item_key: str) -> discord.Embed:
+	"""Completa compra real de item keycode: cobro, stock, envío DM y broadcast."""
+	toggle_manager = create_store_toggle_manager()
+	if not toggle_manager.is_enabled():
+		return _closed_store_embed()
+
+	item = store_manager.get_store_item(str(item_key or ""))
+	if not item:
+		return _item_not_found_embed(str(item_key or ""))
+
+	item_name = str(item.get("nombre") or item.get("item_key") or "item")
+	if _normalize_item_category(item) != "keycode":
+		return _purchase_error_embed("Este item no es un keycode.")
+
+	# Validar stream si es necesario
+	metadata = item.get("metadata", {})
+	requires_stream = bool(metadata.get("stream", False)) if isinstance(metadata, dict) else False
+	if requires_stream:
+		stream_state = StreamManager().get_status()
+		if not bool(stream_state.get("is_live", False)):
+			return _stream_required_for_keycode_embed()
+
+	raw_quantity = item.get("quantity", -1)
+	quantity = int(raw_quantity) if raw_quantity is not None else -1
+	if quantity == 0:
+		return _out_of_stock_embed(item_name)
+
+	profile = _get_user_profile(interaction)
+	if not profile:
+		return _linked_account_required_embed()
+
+	user_id = int(profile.user_id)
+	total_price = _get_user_price(item=item, user_id=user_id)
+	if total_price is None or total_price < 0:
+		return _purchase_error_embed("No se pudo calcular el precio del item para tu cuenta.")
+
+	balance_info = get_user_balance_by_id(user_id)
+	if not balance_info.get("user_exists"):
+		return _linked_account_required_embed()
+
+	user_balance = float(balance_info.get("global_points", 0.0) or 0.0)
+	currency_symbol = _get_currency_symbol_for_guild(interaction)
+	if user_balance < total_price:
+		return _insufficient_balance_embed(item_name, total_price, currency_symbol, user_balance)
+
+	item_cooldown = max(0, int(item.get("cooldown", 0) or 0))
+	global_cooldown = max(0, int(item.get("global_cooldown", 0) or 0))
+	cooldown_manager = create_store_cooldown_manager()
+	status = cooldown_manager.get_cooldown_status(item_key=str(item.get("item_key") or ""), user_id=int(interaction.user.id))
+	if status.get("blocked"):
+		return _cooldown_blocked_embed(
+			item_name=item_name,
+			user_remaining=int(status.get("user_remaining", 0) or 0),
+			global_remaining=int(status.get("global_remaining", 0) or 0),
+		)
+
+	guild_id_text = str(interaction.guild.id) if interaction.guild else None
+	channel_id_text = str(interaction.channel_id) if interaction.channel_id else None
+	source_id = f"store_purchase:{guild_id_text or 'noguild'}:{item.get('item_key')}:{interaction.id}"
+
+	try:
+		balance_after = apply_balance_delta(
+			user_id=user_id,
+			delta=-total_price,
+			reason="store_purchase_keycode",
+			platform="discord",
+			guild_id=guild_id_text,
+			channel_id=channel_id_text,
+			source_id=source_id,
+			system_account=economy_manager.COMMON_FUND_ACCOUNT,
+		)
+	except ValueError:
+		return _insufficient_balance_embed(item_name, total_price, currency_symbol, user_balance)
+	except Exception:
+		return _purchase_error_embed("Ocurrió un error descontando puntos. Inténtalo de nuevo.")
+
+	# Consumir un keycode del stock
+	consume_result = store_manager.consume_keycode(str(item.get("item_key") or ""))
+	if not consume_result.get("success"):
+		# Reembolso de seguridad si se cobró pero no se pudo consumir keycode
+		try:
+			apply_balance_delta(
+				user_id=user_id,
+				delta=total_price,
+				reason="store_purchase_refund_keycode_failed",
+				platform="discord",
+				guild_id=guild_id_text,
+				channel_id=channel_id_text,
+				source_id=f"{source_id}:refund",
+				system_account=economy_manager.COMMON_FUND_ACCOUNT,
+			)
+		except Exception:
+			pass
+		return _out_of_stock_embed(item_name)
+
+	consumed_keycode = str(consume_result.get("keycode") or "")
+	if not consumed_keycode:
+		# Reembolso si no se pudo obtener el keycode
+		try:
+			apply_balance_delta(
+				user_id=user_id,
+				delta=total_price,
+				reason="store_purchase_refund_keycode_empty",
+				platform="discord",
+				guild_id=guild_id_text,
+				channel_id=channel_id_text,
+				source_id=f"{source_id}:refund_empty",
+				system_account=economy_manager.COMMON_FUND_ACCOUNT,
+			)
+		except Exception:
+			pass
+		return _purchase_error_embed("No se pudo obtener un código válido. Por favor, inténtalo de nuevo.")
+
+	# Enviar el código por DM al usuario
+	try:
+		dm_sent = await _send_keycode_via_dm(interaction.user, consumed_keycode, item_name)
+		if not dm_sent:
+			# Advertencia pero continuar (el usuario puede intentar recuperar el código después)
+			print(f"[KEYCODE] No se pudo enviar DM a usuario {interaction.user.id} para item {item_key}")
+	except Exception as exc:
+		print(f"[KEYCODE] Error enviando DM: {exc}")
+
+	cooldown_manager.register_purchase(
+		item_key=str(item.get("item_key") or ""),
+		user_id=int(interaction.user.id),
+		user_cooldown_seconds=item_cooldown,
+		global_cooldown_seconds=global_cooldown,
+	)
+
+	await _sync_store_item_post(interaction=interaction, item=item)
+	await _send_keycode_purchase_notification(interaction=interaction, item=item, keycode=consumed_keycode)
+
+	return _purchase_success_embed(
+		item_name=item_name,
+		total_price=total_price,
+		currency_symbol=currency_symbol,
+		balance_after=float(balance_after),
 	)
 
 
@@ -445,17 +661,27 @@ async def process_item_purchase(interaction: discord.Interaction, item_key: str)
 			return
 
 		item_category = _normalize_item_category(item)
-		if item_category != "sound":
+		if item_category not in {"sound", "keycode"}:
 			await interaction.response.send_message(embed=_only_sound_sales_available_embed(), ephemeral=True)
 			return
 
-		stream_state = StreamManager().get_status()
-		if not bool(stream_state.get("is_live", False)):
-			await interaction.response.send_message(
-				embed=_stream_required_for_sound_embed(),
-				ephemeral=True,
-			)
-			return
+		# Validar stream si es sound o si es keycode que lo requiere
+		requires_stream = False
+		if item_category == "sound":
+			requires_stream = True
+		elif item_category == "keycode":
+			metadata = item.get("metadata", {})
+			requires_stream = bool(metadata.get("stream", False)) if isinstance(metadata, dict) else False
+
+		if requires_stream:
+			stream_state = StreamManager().get_status()
+			if not bool(stream_state.get("is_live", False)):
+				if item_category == "sound":
+					embed = _stream_required_for_sound_embed()
+				else:
+					embed = _stream_required_for_keycode_embed()
+				await interaction.response.send_message(embed=embed, ephemeral=True)
+				return
 
 		raw_quantity = item.get("quantity", -1)
 		quantity = int(raw_quantity) if raw_quantity is not None else -1
@@ -481,7 +707,7 @@ async def process_item_purchase(interaction: discord.Interaction, item_key: str)
 
 		currency_symbol = _get_currency_symbol_for_guild(interaction)
 		item_name = str(item.get("nombre") or item.get("item_key") or item_key)
-		confirm_view = StorePurchaseConfirmView(item_key=str(item.get("item_key") or item_key), buyer_discord_id=int(interaction.user.id))
+		confirm_view = StorePurchaseConfirmView(item_key=str(item.get("item_key") or item_key), buyer_discord_id=int(interaction.user.id), item_category=item_category)
 		await interaction.response.send_message(
 			embed=_confirm_purchase_embed(item_name=item_name, total_price=total_price, currency_symbol=currency_symbol),
 			view=confirm_view,

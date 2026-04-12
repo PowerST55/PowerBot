@@ -294,7 +294,7 @@ class MineView(discord.ui.View):
 		item_name = str(selected.get("name") or "objeto")
 		reward = float(selected.get("price") or 0)
 		probability = float(selected.get("probability") or 0)
-		item_ip_percent = float(selected.get("ip_percent", selected.get("ip%", 0.0)) or 0.0)
+		item_ip_percent = float(selected.get("ip%", selected.get("ip_percent", 0.0)) or 0.0)
 		item_custom_text = str(selected.get("custom_text") or "").strip()
 
 		user, _, _ = get_or_create_discord_user(
@@ -522,7 +522,7 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 			name = str(item.get("name") or "objeto")
 			price = float(item.get("price") or 0)
 			prob = float(item.get("probability") or 0)
-			ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)) or 0.0)
+			ip_percent = float(item.get("ip%", item.get("ip_percent", 0.0)) or 0.0)
 			label = f"-{_format_currency(abs(price), currency_symbol)}"
 			if ip_percent > 0:
 				label = f"{label} + ip {_format_value(ip_percent)}%"

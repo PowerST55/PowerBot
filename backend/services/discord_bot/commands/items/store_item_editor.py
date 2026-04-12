@@ -103,7 +103,7 @@ def _build_editor_embed(item: EditableStoreItem) -> discord.Embed:
 	name = str(data.get("nombre") or item.item_key)
 	rareza = str(data.get("rareza") or "common")
 	base_price = float(data.get("base_price", 0.0) or 0.0)
-	ip_percent = float(data.get("ip_percent", data.get("ip%", 0.0)) or 0.0)
+	ip_percent = float(data.get("ip%", data.get("ip_percent", 0.0)) or 0.0)
 	cooldown = int(data.get("cooldown", 0) or 0)
 	global_cd = int(data.get("global_cooldown", 0) or 0)
 	raw_quantity = data.get("quantity", -1)
@@ -369,7 +369,7 @@ class StoreItemEditorView(discord.ui.View):
 		async def _apply(parsed: Any) -> None:
 			def _mutate(cfg: dict[str, Any]) -> None:
 				cfg["ip%"] = float(parsed)
-				cfg["ip_percent"] = float(parsed)
+				cfg.pop("ip_percent", None)
 
 			await self._save_and_sync(
 				interaction=interaction,
@@ -381,7 +381,7 @@ class StoreItemEditorView(discord.ui.View):
 			title="Editar ip%",
 			label="ip%",
 			placeholder="Ej: 2.5",
-			default_value=str(item.item_data.get("ip_percent", item.item_data.get("ip%", 0.0)) or 0.0),
+			default_value=str(item.item_data.get("ip%", item.item_data.get("ip_percent", 0.0)) or 0.0),
 			max_length=24,
 			parser=_parse,
 			on_parsed=_apply,

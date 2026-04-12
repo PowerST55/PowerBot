@@ -164,6 +164,8 @@ class DiscordStorePackager:
 			return "card"
 		if raw in {"sound", "audio", "sfx"}:
 			return "sound"
+		if raw in {"keycode", "key", "code"}:
+			return "keycode"
 		return "sound"
 
 	@staticmethod
@@ -202,7 +204,7 @@ class DiscordStorePackager:
 		currency_symbol: str,
 	) -> discord.Embed:
 		base_price = float(item.get("base_price", 0.0))
-		ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)))
+		ip_percent = float(item.get("ip%", item.get("ip_percent", 0.0)))
 		raw_quantity = item.get("quantity", -1)
 		quantity = int(raw_quantity) if raw_quantity is not None else -1
 		internal_id = str(item.get("internal_id") or "S?").upper()
@@ -245,6 +247,60 @@ class DiscordStorePackager:
 		return embed
 
 	@staticmethod
+	def _build_keycode_embed(
+		item: Dict[str, Any],
+		currency_symbol: str,
+	) -> discord.Embed:
+		base_price = float(item.get("base_price", 0.0))
+		ip_percent = float(item.get("ip%", item.get("ip_percent", 0.0)))
+		raw_quantity = item.get("quantity", -1)
+		quantity = int(raw_quantity) if raw_quantity is not None else -1
+		internal_id = str(item.get("internal_id") or "K?").upper()
+		item_name = str(item.get("nombre", item.get("item_key")))
+		rareza_value = item.get("rareza")
+		has_rareza = isinstance(rareza_value, str) and rareza_value.strip() != ""
+		embed_color = discord.Color.red() if quantity == 0 else (
+			DiscordStorePackager._get_rarity_color(str(rareza_value).lower()) if has_rareza else discord.Color.blurple()
+		)
+
+		embed = discord.Embed(
+			title=f"🔑 `ID:{internal_id}` {item_name}",
+			description=str(item.get("descripcion") or "Sin descripción."),
+			color=embed_color,
+		)
+
+		embed.add_field(name="Tipo", value="keycode", inline=True)
+		embed.add_field(
+			name="Precio",
+			value=f"{DiscordStorePackager._format_number(base_price)} {currency_symbol}",
+			inline=True,
+		)
+		
+		# Mostrar códigos disponibles
+		metadata = item.get("metadata", {})
+		keycodes = metadata.get("keycodes", []) if isinstance(metadata, dict) else []
+		available_count = len(keycodes) if isinstance(keycodes, list) else 0
+		embed.add_field(
+			name="Disponibilidad",
+			value=f"`{available_count}` código{'s' if available_count != 1 else ''} disponible{'s' if available_count != 1 else ''}",
+			inline=False,
+		)
+
+		if has_rareza:
+			embed.add_field(name="Rareza", value=str(rareza_value).lower(), inline=True)
+		
+		# Nota importante
+		embed.add_field(
+			name="⚠️ Importante",
+			value="Código de uso único. Te llegará por DM después de la compra.",
+			inline=False,
+		)
+		
+		if quantity == 0:
+			embed.set_footer(text="🔴 Sin stock disponible")
+		return embed
+
+	@staticmethod
 	def _build_card_embed(
 		item: Dict[str, Any],
 		currency_symbol: str,
@@ -256,7 +312,7 @@ class DiscordStorePackager:
 		item_name = str(item.get("nombre", item.get("item_key")))
 
 		base_price = float(item.get("base_price", 0.0))
-		ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)))
+		ip_percent = float(item.get("ip%", item.get("ip_percent", 0.0)))
 
 		embed = discord.Embed(
 			title=f"🃏 `ID:{internal_id}` {item_name}",
@@ -401,6 +457,8 @@ class DiscordStorePackager:
 		item_category = DiscordStorePackager._normalize_item_category(item)
 		if item_category == "card":
 			return DiscordStorePackager._build_card_embed(item=item, currency_symbol=currency_symbol)
+		if item_category == "keycode":
+			return DiscordStorePackager._build_keycode_embed(item=item, currency_symbol=currency_symbol)
 		return DiscordStorePackager._build_sound_embed(item=item, currency_symbol=currency_symbol)
 
 	@staticmethod

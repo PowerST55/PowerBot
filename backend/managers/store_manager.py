@@ -142,6 +142,8 @@ def _normalize_category(metadata: Dict[str, Any]) -> str:
 		return "card"
 	if raw in {"sound", "audio", "sfx"}:
 		return "sound"
+	if raw in {"keycode", "key", "code"}:
+		return "keycode"
 	return "sound"
 
 
@@ -228,11 +230,27 @@ def _load_item_config(item_folder: Path, internal_ids_map: Dict[str, str]) -> tu
 
 	if not thumbnail_path:
 		return None, f"{item_key}: falta thumbnail"
+	
+	# Validar requerimientos por categoría
 	if item_category == "sound":
 		if not video_path:
 			return None, f"{item_key}: falta video"
 		if not audio_path:
 			return None, f"{item_key}: falta audio"
+	elif item_category == "keycode":
+		if not video_path:
+			return None, f"{item_key}: falta video (requerido para keycode)"
+		# Keycodes NO deben tener audio
+		keycodes = metadata.get("keycodes", [])
+		if not isinstance(keycodes, list) or len(keycodes) == 0:
+			return None, f"{item_key}: metadata.keycodes debe ser un array no vacío"
+		# Validar que cada keycode sea string no vacío
+		for idx, code in enumerate(keycodes):
+			if not isinstance(code, str) or not code.strip():
+				return None, f"{item_key}: keycode en índice {idx} es inválido"
+		# La quantity debe ser igual al de keycodes
+		if quantity != len(keycodes):
+			quantity = len(keycodes)
 
 	item: Dict[str, Any] = {
 		"item_key": item_key,
@@ -242,7 +260,6 @@ def _load_item_config(item_folder: Path, internal_ids_map: Dict[str, str]) -> tu
 		"rareza": str(cfg.get("rareza")).strip().lower() if cfg.get("rareza") is not None else None,
 		"base_price": round(base_price, 2),
 		"ip%": round(ip_percent, 4),
-		"ip_percent": round(ip_percent, 4),
 		"cooldown": item_cooldown,
 		"global_cooldown": global_cooldown,
 		"quantity": quantity,
@@ -339,7 +356,7 @@ def calculate_user_price(item_key: str, user_id: int) -> Optional[Dict[str, Any]
 		user_balance = float(balance_info.get("global_points", 0.0))
 
 	base_price = float(item.get("base_price", 0.0))
-	ip_percent = float(item.get("ip_percent", item.get("ip%", 0.0)))
+	ip_percent = float(item.get("ip%", item.get("ip_percent", 0.0)))
 	ip_amount = round(user_balance * (ip_percent / 100.0), 2)
 	final_price = round(base_price + ip_amount, 2)
 
@@ -347,7 +364,6 @@ def calculate_user_price(item_key: str, user_id: int) -> Optional[Dict[str, Any]
 		"item_key": item.get("item_key"),
 		"base_price": round(base_price, 2),
 		"ip%": round(ip_percent, 4),
-		"ip_percent": round(ip_percent, 4),
 		"user_balance": round(user_balance, 2),
 		"ip_amount": ip_amount,
 		"final_price": final_price,
@@ -382,6 +398,122 @@ def get_store_stats() -> Dict[str, Any]:
 			"cached_items": len(_STORE_ITEMS_BY_KEY),
 			"last_sync_at": _LAST_SYNC_AT,
 			"last_sync_result": dict(_LAST_SYNC_RESULT),
+		}
+
+
+def consume_keycode(item_key: str) -> Dict[str, Any]:
+	"""Consume un keycode individual del array metadata.keycodes.
+	
+	Retorna:
+	- success: bool
+	- keycode: str | None (el código consumido)
+	- remaining: int (códigos restantes en el array)
+	- message: str
+	"""
+	_ensure_cache()
+	key = str(item_key or "").strip()
+	if not key:
+		return {
+			"success": False,
+			"keycode": None,
+			"remaining": None,
+			"message": "item_key inválido",
+		}
+
+	with _LOCK:
+		item = _STORE_ITEMS_BY_KEY.get(key)
+		if not item:
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": None,
+				"message": "Item no encontrado",
+			}
+
+		metadata = item.get("metadata", {})
+		if not isinstance(metadata, dict):
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": None,
+				"message": "Metadata inválida en item cacheado",
+			}
+
+		keycodes = metadata.get("keycodes", [])
+		if not isinstance(keycodes, list) or len(keycodes) == 0:
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": None,
+				"message": "No hay códigos disponibles",
+			}
+
+		# Obtener el primer código
+		consumed_code = keycodes[0]
+
+		# Actualizar el archivo config.json
+		config_rel = str(item.get("config_file") or "").strip()
+		if not config_rel:
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": len(keycodes),
+				"message": "No se encontró config_file del item",
+			}
+
+		config_path = PROJECT_ROOT / config_rel
+		try:
+			with open(config_path, "r", encoding="utf-8") as file:
+				cfg = json.load(file)
+		except Exception as exc:
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": len(keycodes),
+				"message": f"No se pudo leer config.json: {exc}",
+			}
+
+		if not isinstance(cfg, dict):
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": len(keycodes),
+				"message": "config.json no es un objeto válido",
+			}
+
+		# Actualizar metadata eliminando el código consumido
+		cfg_metadata = cfg.get("metadata", {})
+		if not isinstance(cfg_metadata, dict):
+			cfg_metadata = {}
+		
+		cfg_metadata["keycodes"] = keycodes[1:]  # Eliminar el primero
+		cfg["metadata"] = cfg_metadata
+		
+		# Reducir quantity también
+		cfg["quantity"] = len(cfg_metadata["keycodes"])
+
+		# Guardar el archivo
+		try:
+			with open(config_path, "w", encoding="utf-8") as file:
+				json.dump(cfg, file, indent=2, ensure_ascii=False)
+		except Exception as exc:
+			return {
+				"success": False,
+				"keycode": None,
+				"remaining": len(keycodes),
+				"message": f"No se pudo actualizar config.json: {exc}",
+			}
+
+		# Actualizar caché en memoria
+		item["metadata"] = cfg_metadata
+		item["quantity"] = len(cfg_metadata["keycodes"])
+		_STORE_ITEMS_BY_KEY[key] = item
+
+		return {
+			"success": True,
+			"keycode": consumed_code,
+			"remaining": len(cfg_metadata["keycodes"]),
+			"message": "Código consumido exitosamente",
 		}
 
 
