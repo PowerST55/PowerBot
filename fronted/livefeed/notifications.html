@@ -227,18 +227,41 @@
         }
 
         async function resolveAudioPath(notifId, config = {}, data = {}) {
-            if (data.audioPath || data.audio) {
-                return toMediaUrl(data.audioPath || data.audio, notifId);
+            // 1. Si viene explícitamente en el payload, usarlo (para sonidos Discord puede enviar audio_path)
+            if (data.audioPath) {
+                return toMediaUrl(data.audioPath, notifId);
             }
 
             if (mediaPathCache.audio[notifId]) {
                 return mediaPathCache.audio[notifId];
             }
 
-            const candidates = buildMediaCandidates(notifId, config.audio, ['audio.mp3', 'audio.wav', 'audio.ogg', defaultNotificationSound]);
-            const foundPath = await findFirstExistingMedia(candidates);
-            mediaPathCache.audio[notifId] = foundPath || defaultNotificationSound;
-            return mediaPathCache.audio[notifId];
+            // 2. Si NO hay audio configurado en el item pero SÍ hay video, usar audio del video
+            if (!config.audio && data.videoPath) {
+                // El video ya contiene audio, lo extraerá el navegador
+                mediaPathCache.audio[notifId] = data.videoPath;
+                return data.videoPath;
+            }
+
+            // 3. Si hay audio explícito en config, buscarlo (fallback para items sound)
+            if (config.audio) {
+                const candidates = buildMediaCandidates(notifId, config.audio, ['audio.mp3', 'audio.wav', 'audio.ogg']);
+                const foundPath = await findFirstExistingMedia(candidates);
+                if (foundPath) {
+                    mediaPathCache.audio[notifId] = foundPath;
+                    return foundPath;
+                }
+                
+                // Si no encontró audio.mp3 pero hay video, caer a audio del video
+                if (data.videoPath) {
+                    mediaPathCache.audio[notifId] = data.videoPath;
+                    return data.videoPath;
+                }
+            }
+
+            // 4. Fallback: sonido por defecto
+            mediaPathCache.audio[notifId] = defaultNotificationSound;
+            return defaultNotificationSound;
         }
 
         async function waitForAudioCanPlayThrough(audioElement, timeoutMs = 5000) {
@@ -306,13 +329,58 @@
 
         async function playNotificationSound(notifId, config = {}, data = {}) {
             const audioElement = document.getElementById('notification-sound');
+            const videoElement = document.getElementById('notification-video');
             if (!audioElement) return;
 
+            // Esperar a que el video esté listo (si es que reproduce el mismo video que el audio)
             const audioPath = await resolveAudioPath(notifId, config, data);
-            await primeNotificationAudio(audioPath);
+            const videoPath = videoElement?.src;
+            
+            // Si el audio viene del video, esperar a que video esté buffered
+            const isAudioFromVideo = audioPath === videoPath && audioPath && audioPath.includes('.mp4');
+            if (isAudioFromVideo && videoElement && videoElement.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+                console.log(`⏳ Esperando a que video se buffer para reproducir audio desde él...`);
+                await new Promise((resolve) => {
+                    const onCanPlayThrough = () => {
+                        cleanup();
+                        resolve();
+                    };
+                    const onTimeout = () => {
+                        cleanup();
+                        console.warn('⚠ Timeout esperando video buffer, reproduciendo audio de todas formas');
+                        resolve();
+                    };
+                    const timeoutId = setTimeout(onTimeout, 8000);
+                    const cleanup = () => {
+                        clearTimeout(timeoutId);
+                        videoElement.removeEventListener('canplaythrough', onCanPlayThrough);
+                    };
+                    videoElement.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
+                });
+            }
 
+            // Configurar el audio element
+            if (audioWarmupState.currentSrc !== audioPath) {
+                audioWarmupState.currentSrc = audioPath;
+                audioElement.src = audioPath;
+                audioWarmupState.readyPromise = null;
+            }
+
+            if (!audioWarmupState.readyPromise) {
+                audioWarmupState.readyPromise = waitForAudioCanPlayThrough(audioElement, 8000);
+            }
+
+            await audioWarmupState.readyPromise;
+
+            // Reproducir con sincronización de video (si es que reproduce video)
             try {
                 audioElement.currentTime = 0;
+                
+                // Si el video ya está reproduciéndose, sincronizar tiempo
+                if (videoElement && videoElement.currentTime > 0) {
+                    audioElement.currentTime = videoElement.currentTime;
+                }
+
                 await audioElement.play();
             } catch (error) {
                 console.warn('⚠ No se pudo reproducir el sonido de notificacion:', error);
@@ -466,7 +534,7 @@
                 videoContainer.classList.remove('hide'); // Remover clase hide si existe
                 videoContainer.style.display = 'block';
 
-                // Esperar a que el video cargue para obtener la duración
+                // Esperar a que el video cargue completamente para reproducir sin cortes
                 return new Promise((resolve) => {
                     let settled = false;
                     let fallbackTimeoutId = null;
@@ -476,6 +544,7 @@
                             clearTimeout(fallbackTimeoutId);
                             fallbackTimeoutId = null;
                         }
+                        videoElement.removeEventListener('canplaythrough', handleCanPlayThrough);
                         videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
                         videoElement.removeEventListener('ended', handleEnded);
                         videoElement.removeEventListener('error', handleError);
@@ -488,11 +557,11 @@
                         resolve(value);
                     };
 
-                    const handleLoadedMetadata = () => {
+                    const handleCanPlayThrough = () => {
                         const duration = videoElement.duration * 1000; // convertir a ms
-                        console.log(`▶ Reproduciendo video: ${notifId} (${(duration/1000).toFixed(2)}s)`);
+                        console.log(`▶ Video completamente buffered: ${notifId} (${(duration/1000).toFixed(2)}s)`);
 
-                        // Fallback si el evento ended no llega (corrupción de media o bloqueo del navegador).
+                        // Fallback si el evento ended no llega
                         const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 4200;
                         fallbackTimeoutId = setTimeout(() => {
                             console.warn(`⚠ Timeout de reproducción para ${notifId}. Cerrando notificación para evitar bloqueo.`);
@@ -515,6 +584,11 @@
                         videoElement.addEventListener('ended', handleEnded);
                     };
 
+                    const handleLoadedMetadata = () => {
+                        // Esperar a canplaythrough si es posible, pero si timea fallback a loadedmetadata
+                        console.log(`⏳ Metadata cargado para ${notifId}, esperando buffer completo...`);
+                    };
+
                     // Ocultar video cuando termine
                     const handleEnded = () => {
                         const duration = videoElement.duration * 1000;
@@ -535,8 +609,23 @@
                         settle(0);
                     };
 
-                    videoElement.addEventListener('loadedmetadata', handleLoadedMetadata);
-                    videoElement.addEventListener('error', handleError);
+                    // Fallback: si canplaythrough no llega en 10 segundos, reproducir de todas formas
+                    const canPlayThroughTimeout = setTimeout(() => {
+                        if (!settled && videoElement.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+                            console.warn('⚠ canplaythrough timeout, reproduciendo con datos cargados...');
+                            handleCanPlayThrough();
+                        }
+                    }, 10000);
+
+                    const originalSettle = settle;
+                    settle = (value) => {
+                        clearTimeout(canPlayThroughTimeout);
+                        originalSettle(value);
+                    };
+
+                    videoElement.addEventListener('canplaythrough', handleCanPlayThrough, { once: true });
+                    videoElement.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+                    videoElement.addEventListener('error', handleError, { once: true });
                 });
             } catch (error) {
                 console.error('Error reproduciendo video:', error);

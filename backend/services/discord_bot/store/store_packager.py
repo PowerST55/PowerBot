@@ -26,16 +26,17 @@ logger = logging.getLogger(__name__)
 class StoreBuyButtonView(discord.ui.View):
 	"""Vista persistente para el botón de compra de un item."""
 
-	def __init__(self, item_key: str, custom_id: str):
+	def __init__(self, item_key: str, custom_id: str, disabled: bool = False):
 		super().__init__(timeout=None)
 		self.item_key = str(item_key)
 		self.custom_id = str(custom_id)
 
 		buy_button = discord.ui.Button(
-			label="Comprar",
-			style=discord.ButtonStyle.success,
+			label="Comprar" if not disabled else "Sin stock",
+			style=discord.ButtonStyle.success if not disabled else discord.ButtonStyle.secondary,
 			custom_id=self.custom_id,
-			emoji="🛍️",
+			emoji="🛍️" if not disabled else "📦",
+			disabled=disabled,
 		)
 		buy_button.callback = self._on_buy_click
 		self.add_item(buy_button)
@@ -98,8 +99,16 @@ class DiscordStorePackager:
 			quantity = -1
 
 		if quantity == 0:
-			# Cuando no hay unidades, forzar etiqueta única de agotado.
-			return [("agotado", "📦")]
+			# Cuando no hay unidades, mostrar tanto la categoría como "agotado"
+			tag_specs = [("agotado", "📦")]
+			category = DiscordStorePackager._normalize_item_category(item)
+			if category == "sound":
+				tag_specs.append(("sonido", "🎧"))
+			elif category == "card":
+				tag_specs.append(("carta", "⭐"))
+			elif category == "keycode":
+				tag_specs.append(("keycode", "🔑"))
+			return tag_specs
 
 		tag_specs: list[tuple[str, Optional[str]]] = []
 
@@ -108,6 +117,8 @@ class DiscordStorePackager:
 			tag_specs.append(("sonido", "🎧"))
 		elif category == "card":
 			tag_specs.append(("carta", "⭐"))
+		elif category == "keycode":
+			tag_specs.append(("keycode", "🔑"))
 
 		item_type = DiscordStorePackager._normalize_item_type(item)
 		if item_type == "consumible":
@@ -403,9 +414,17 @@ class DiscordStorePackager:
 		return f"powerbot:store:buy:{guild_id}:{hash_suffix}"
 
 	@staticmethod
-	def _build_buy_view(guild_id: int, item_key: str) -> StoreBuyButtonView:
+	def _build_buy_view(guild_id: int, item_key: str, item: Dict[str, Any] | None = None) -> StoreBuyButtonView:
 		custom_id = DiscordStorePackager._build_buy_custom_id(guild_id=guild_id, item_key=item_key)
-		return StoreBuyButtonView(item_key=item_key, custom_id=custom_id)
+		# Determinar si el botón debe estar deshabilitado (sin stock)
+		disabled = False
+		if item and isinstance(item, dict):
+			try:
+				quantity = int(item.get("quantity", -1) or -1)
+				disabled = quantity == 0
+			except Exception:
+				pass
+		return StoreBuyButtonView(item_key=item_key, custom_id=custom_id, disabled=disabled)
 
 	@staticmethod
 	def _format_number(value: float) -> str:
@@ -597,7 +616,7 @@ class DiscordStorePackager:
 			tag_specs = DiscordStorePackager._build_item_tag_specs(item)
 			tags_by_name = await DiscordStorePackager._ensure_forum_tags(forum_channel, tag_specs)
 			applied_tags = [tags_by_name[name.lower()] for name, _ in tag_specs if name.lower() in tags_by_name]
-			buy_view = DiscordStorePackager._build_buy_view(guild_id=guild.id, item_key=item_key)
+			buy_view = DiscordStorePackager._build_buy_view(guild_id=guild.id, item_key=item_key, item=item)
 			files = DiscordStorePackager._build_files(item)
 			if files:
 				item_category = DiscordStorePackager._normalize_item_category(item)
@@ -632,7 +651,11 @@ class DiscordStorePackager:
 							message_id = int(info.get("message_id"))
 						break
 
-					buy_view = StoreBuyButtonView(item_key=item_key, custom_id=custom_id)
+					buy_view = StoreBuyButtonView(
+						item_key=item_key, 
+						custom_id=custom_id,
+						disabled=int(item.get("quantity", -1) or -1) == 0
+					)
 					starter_message: Optional[discord.Message] = None
 
 					if message_id is not None:
