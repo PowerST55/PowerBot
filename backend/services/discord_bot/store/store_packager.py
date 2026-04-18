@@ -282,10 +282,12 @@ class DiscordStorePackager:
 
 		embed.add_field(name="Tipo", value="keycode", inline=True)
 		embed.add_field(
-			name="Precio",
+			name="Precio Base",
 			value=f"{DiscordStorePackager._format_number(base_price)} {currency_symbol}",
 			inline=True,
 		)
+		if ip_percent > 0:
+			embed.add_field(name="ip%", value=f"{DiscordStorePackager._format_number(ip_percent)}%", inline=True)
 		
 		# Mostrar códigos disponibles
 		metadata = item.get("metadata", {})
