@@ -44,17 +44,13 @@ def spin_slots(bet_amount: int, casino_fund_balance: float) -> Tuple[List[str], 
 	health_score = casino_master.get_casino_health_score(casino_fund_balance, bet_amount)
 	casino_tier = casino_master.get_casino_tier(casino_fund_balance, bet_amount)
 
-	# Endurecer la penalización: mayor peso a la salud del casino
-	# Si health_score es bajo, la probabilidad de loss sube mucho más
-	# Si health_score es alto, la probabilidad de premio sube menos
-	# Ajuste: multiplicar el impacto por 2
-	penalty_factor = 2.0
+	liquidity_pressure = 1.0 - health_score
 	result_type = random.choices(
 		["loss", "x2", "x3"],
 		weights=casino_master.normalize_weights([
-			0.60 - (0.12 * (1 - health_score)),  # Si health_score bajo, sube loss
-			0.26 + (0.03 * health_score) - (0.06 * (1 - health_score)),
-			0.14 + (0.03 * health_score) - (0.03 * (1 - health_score)),
+			0.62 + (0.06 * liquidity_pressure) - (0.02 * health_score),
+			0.24 + (0.03 * health_score) - (0.025 * liquidity_pressure),
+			0.12 + (0.02 * health_score) - (0.035 * liquidity_pressure),
 		]),
 		k=1
 	)[0]
@@ -65,15 +61,18 @@ def spin_slots(bet_amount: int, casino_fund_balance: float) -> Tuple[List[str], 
 		x2_net_win = round((bet_amount * SLOT_PAYOUTS[symbol]["x2"]) - bet_amount, 2)
 		x3_net_win = round((bet_amount * SLOT_PAYOUTS[symbol]["x3"]) - bet_amount, 2)
 		base_prob = float(SLOT_PAYOUTS[symbol]["prob"])
-		# Penalización extra: si el fondo está bajo, baja aún más la probabilidad de premio
 		x2_weight = base_prob * casino_master.get_positive_outcome_weight(x2_net_win, casino_fund_balance, bet_amount)
 		x3_weight = base_prob * casino_master.get_positive_outcome_weight(x3_net_win, casino_fund_balance, bet_amount)
-		if health_score < 0.5:
-			x2_weight *= 0.5
-			x3_weight *= 0.3
-		elif health_score < 0.8:
-			x2_weight *= 0.8
-			x3_weight *= 0.6
+
+		# Sesgo leve adicional hacia la salud del casino para evitar quiebras rápidas.
+		x2_weight *= 0.84 + (0.16 * health_score)
+		x3_weight *= 0.72 + (0.20 * health_score)
+		if health_score < 0.45:
+			x2_weight *= 0.82
+			x3_weight *= 0.70
+		elif health_score < 0.75:
+			x2_weight *= 0.93
+			x3_weight *= 0.88
 		x2_symbol_weights.append(x2_weight)
 		x3_symbol_weights.append(x3_weight)
 

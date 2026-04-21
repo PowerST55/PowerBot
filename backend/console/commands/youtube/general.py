@@ -293,6 +293,12 @@ async def _start_yapi_runtime(console) -> bool:
                         previous_balance=previous_points,
                         new_balance=new_points,
                     )
+                else:
+                    reason = str(result.get("reason") or "unknown")
+                    if reason not in {"cooldown_active", "duplicate_source_event"}:
+                        console.print(
+                            f"[warning]⚠ YouTube earning omitido para {message.author_name}: {reason}[/warning]"
+                        )
             except Exception as exc:  # pragma: no cover - sólo logging
                 console.print(
                     f"[warning]⚠ Error en earning YouTube (autostream): {exc}[/warning]"
@@ -873,11 +879,16 @@ async def cmd_youtube_listener(ctx: CommandContext) -> None:
         async def _earning_handler(message):
             try:
                 from backend.services.youtube_api.economy.earning import process_message_earning
-                process_message_earning(
+                result = process_message_earning(
                     youtube_channel_id=message.author_channel_id,
                     live_chat_id=live_chat_id,
                     source_id=message.id or None,
                 )
+                reason = str(result.get("reason") or "unknown")
+                if not result.get("awarded") and reason not in {"cooldown_active", "duplicate_source_event"}:
+                    console.print(
+                        f"[warning]⚠ YouTube earning omitido para {message.author_name}: {reason}[/warning]"
+                    )
             except Exception as exc:
                 console.print(f"[warning]⚠ Error en earning YouTube: {exc}[/warning]")
 

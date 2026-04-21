@@ -30,6 +30,7 @@ class YouTubeEconomyConfig:
 			"earning": {
 				"enabled": False,
 			},
+			"sync_source_guild_id": None,
 		}
 
 		self._config = self._load()
@@ -51,6 +52,7 @@ class YouTubeEconomyConfig:
 				merged_earning = dict(self._defaults["earning"])
 				merged_earning.update(loaded.get("earning", {}))
 				merged["earning"] = merged_earning
+				merged["sync_source_guild_id"] = loaded.get("sync_source_guild_id")
 				return merged
 			except Exception:
 				return self._defaults.copy()
@@ -99,6 +101,21 @@ class YouTubeEconomyConfig:
 		"""Activa o desactiva la ganancia de puntos por chat."""
 		self._config.setdefault("earning", {})
 		self._config["earning"]["enabled"] = bool(enabled)
+		self._save()
+
+	def get_sync_source_guild_id(self) -> int | None:
+		"""Guild de Discord usada como fuente para syncing de earning."""
+		value = self._config.get("sync_source_guild_id")
+		if value in (None, "", 0):
+			return None
+		try:
+			return int(value)
+		except Exception:
+			return None
+
+	def set_sync_source_guild_id(self, guild_id: int | None) -> None:
+		"""Define la guild de Discord que gobierna el earning de YouTube."""
+		self._config["sync_source_guild_id"] = None if guild_id is None else int(guild_id)
 		self._save()
 
 

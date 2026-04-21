@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.managers import economy_manager
+from backend.services.admin_economy_toggle import is_admin_aps_enabled, set_admin_aps_enabled
 
 
 def _format_amount(value: float) -> str:
@@ -60,6 +61,8 @@ async def cmd_economy(ctx: Any) -> None:
 		ctx.print("  economy fondo_mina           - Ver saldo actual del fondo mina")
 		ctx.print("  economy fondo_mina aps 500   - Agrega 500 pews al fondo mina")
 		ctx.print("  economy fondo_mina rps 500   - Remueve 500 pews del fondo mina")
+		ctx.print("  economy adminaps true        - Habilita APS/RPS admin en Discord y YouTube")
+		ctx.print("  economy adminaps false       - Deshabilita APS/RPS admin en Discord y YouTube")
 		ctx.print("  economy circulacion          - Ver pews en circulacion")
 		ctx.print("  economy oferta               - Ver oferta monetaria total")
 		return
@@ -76,6 +79,27 @@ async def cmd_economy(ctx: Any) -> None:
 	if action in {"oferta", "supply", "total_supply"}:
 		total_supply = economy_manager.get_total_supply()
 		ctx.print(f"Oferta total actual: {_format_amount(total_supply)} pews")
+		return
+
+	if action == "adminaps":
+		if len(ctx.args) == 1:
+			status = "activado" if is_admin_aps_enabled() else "desactivado"
+			ctx.print(f"APS/RPS admin actual: {status}")
+			ctx.print("Uso: economy adminaps <true|false>")
+			return
+
+		value = str(ctx.args[1]).strip().lower()
+		if value not in {"true", "false"}:
+			ctx.error("Uso: economy adminaps <true|false>")
+			return
+
+		enabled = value == "true"
+		set_admin_aps_enabled(enabled)
+		ctx.success(
+			"APS/RPS admin habilitado para Discord y YouTube"
+			if enabled
+			else "APS/RPS admin deshabilitado para Discord y YouTube"
+		)
 		return
 
 	if action in {"fondo_comun", "fondo", "common_fund"}:

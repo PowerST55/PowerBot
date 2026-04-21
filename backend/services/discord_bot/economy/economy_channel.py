@@ -20,6 +20,12 @@ from backend.managers import economy_manager
 from backend.services.discord_bot.config import get_channels_config
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.config.mine_config import get_mine_config
+from backend.services.activities.recharge_config import (
+	calculate_reload_amount,
+	ensure_recharge_config_file,
+	get_casino_recharge_config,
+	get_mine_recharge_config,
+)
 from backend.managers.user_lookup_manager import (
 	find_user_by_discord_id,
 	find_user,
@@ -57,12 +63,8 @@ MILESTONE_LEVELS = [
 ]
 
 BANKRUPTCY_THRESHOLD = 0.99
-CASINO_AUTO_RELOAD_SECONDS = 12 * 60 * 60
-CASINO_AUTO_RELOAD_TARGET = 2500.0
-CASINO_AUTO_RELOAD_PARTIAL_RATIO = 0.15
-MINE_AUTO_RELOAD_SECONDS = 12 * 60 * 60
-MINE_AUTO_RELOAD_TARGET = 2500.0
-MINE_AUTO_RELOAD_PARTIAL_RATIO = 0.15
+
+ensure_recharge_config_file()
 
 
 def _data_dir() -> Path:
@@ -269,13 +271,14 @@ def register_mine_depleted(*, guild_id: int | None = None, source: str = "deplet
 	if current_state.get("is_depleted"):
 		return
 
+	recharge_config = get_mine_recharge_config()
 	now_ts = time.time()
 	set_mine_depletion_state(
 		{
 			**current_state,
 			"is_depleted": True,
 			"depleted_at": now_ts,
-			"next_retry_at": now_ts + MINE_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + int(recharge_config["reload_interval_seconds"]),
 			"guild_id": None if guild_id is None else int(guild_id),
 			"source": str(source or "depleted").strip().lower(),
 		}
@@ -346,6 +349,8 @@ def process_mine_recovery_cycle() -> None:
 	if not state.get("is_depleted"):
 		return
 
+	recharge_config = get_mine_recharge_config()
+	reload_interval_seconds = int(recharge_config["reload_interval_seconds"])
 	mine_balance = float(economy_manager.get_mine_fund_balance())
 	if _mine_has_operable_items_any_guild(mine_balance):
 		register_mine_reopened(
@@ -364,22 +369,18 @@ def process_mine_recovery_cycle() -> None:
 	if common_fund_before <= 0:
 		updated_state = {
 			**state,
-			"next_retry_at": now_ts + MINE_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + reload_interval_seconds,
 			"last_retry_at": now_ts,
 			"last_retry_result": "skipped_common_fund_empty",
 		}
 		set_mine_depletion_state(updated_state)
 		return
 
-	reload_amount = (
-		MINE_AUTO_RELOAD_TARGET
-		if common_fund_before >= MINE_AUTO_RELOAD_TARGET
-		else round(common_fund_before * MINE_AUTO_RELOAD_PARTIAL_RATIO, 2)
-	)
+	reload_amount = calculate_reload_amount("mine", common_fund_before)
 	if reload_amount <= 0:
 		updated_state = {
 			**state,
-			"next_retry_at": now_ts + MINE_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + reload_interval_seconds,
 			"last_retry_at": now_ts,
 			"last_retry_result": "skipped_reload_amount_zero",
 		}
@@ -396,7 +397,7 @@ def process_mine_recovery_cycle() -> None:
 	except Exception:
 		updated_state = {
 			**state,
-			"next_retry_at": now_ts + MINE_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + reload_interval_seconds,
 			"last_retry_at": now_ts,
 			"last_retry_result": "failed_transfer",
 		}
@@ -416,7 +417,7 @@ def process_mine_recovery_cycle() -> None:
 
 	updated_state = {
 		**state,
-		"next_retry_at": now_ts + MINE_AUTO_RELOAD_SECONDS,
+		"next_retry_at": now_ts + reload_interval_seconds,
 		"last_retry_at": now_ts,
 		"last_retry_result": "partial_reload_not_enough",
 		"last_reloaded_amount": float(transfer_result.get("transferred") or reload_amount),
@@ -436,6 +437,7 @@ def register_casino_bankruptcy(
 	net_result: float,
 ) -> None:
 	"""Registra la bancarrota del casino y encola un anuncio global."""
+	recharge_config = get_casino_recharge_config()
 	now_ts = time.time()
 	event = {
 		"type": "casino_bankruptcy",
@@ -453,7 +455,7 @@ def register_casino_bankruptcy(
 		{
 			"is_bankrupt": True,
 			"bankrupt_at": now_ts,
-			"next_retry_at": now_ts + CASINO_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + int(recharge_config["reload_interval_seconds"]),
 			"last_recovery_source": "bankruptcy",
 			**event,
 		}
@@ -500,6 +502,8 @@ def process_casino_recovery_cycle() -> None:
 	if not state.get("is_bankrupt"):
 		return
 
+	recharge_config = get_casino_recharge_config()
+	reload_interval_seconds = int(recharge_config["reload_interval_seconds"])
 	casino_balance = float(economy_manager.get_casino_fund_balance())
 	if casino_balance > BANKRUPTCY_THRESHOLD:
 		previous_bankrupt_balance = float(state.get("new_balance") or 0)
@@ -519,22 +523,18 @@ def process_casino_recovery_cycle() -> None:
 	if common_fund_before <= 0:
 		updated_state = {
 			**state,
-			"next_retry_at": now_ts + CASINO_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + reload_interval_seconds,
 			"last_retry_at": now_ts,
 			"last_retry_result": "skipped_common_fund_empty",
 		}
 		set_casino_bankruptcy_state(updated_state)
 		return
 
-	reload_amount = (
-		CASINO_AUTO_RELOAD_TARGET
-		if common_fund_before >= CASINO_AUTO_RELOAD_TARGET
-		else round(common_fund_before * CASINO_AUTO_RELOAD_PARTIAL_RATIO, 2)
-	)
+	reload_amount = calculate_reload_amount("casino", common_fund_before)
 	if reload_amount <= 0:
 		updated_state = {
 			**state,
-			"next_retry_at": now_ts + CASINO_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + reload_interval_seconds,
 			"last_retry_at": now_ts,
 			"last_retry_result": "skipped_reload_amount_zero",
 		}
@@ -551,7 +551,7 @@ def process_casino_recovery_cycle() -> None:
 	except Exception:
 		updated_state = {
 			**state,
-			"next_retry_at": now_ts + CASINO_AUTO_RELOAD_SECONDS,
+			"next_retry_at": now_ts + reload_interval_seconds,
 			"last_retry_at": now_ts,
 			"last_retry_result": "failed_transfer",
 		}
@@ -572,7 +572,7 @@ def process_casino_recovery_cycle() -> None:
 	updated_state = {
 		**state,
 		"new_balance": casino_balance_after,
-		"next_retry_at": now_ts + CASINO_AUTO_RELOAD_SECONDS,
+		"next_retry_at": now_ts + reload_interval_seconds,
 		"last_retry_at": now_ts,
 		"last_retry_result": "partial_reload_not_enough",
 		"last_reloaded_amount": float(transfer_result.get("transferred") or reload_amount),
@@ -601,7 +601,6 @@ async def notify_casino_bankruptcy_all_guilds(bot: discord.Client, event: dict[s
 
 			if event_type == "casino_reopened":
 				source = str(event.get("source") or "manual").strip().lower()
-				reloaded_amount = float(event.get("reloaded_amount") or 0)
 				embed = discord.Embed(
 					title="🎰 Casino Reabierto",
 					description="El casino ha recuperado fondos y vuelve a aceptar apuestas.",
@@ -611,11 +610,6 @@ async def notify_casino_bankruptcy_all_guilds(bot: discord.Client, event: dict[s
 					name="Origen",
 					value="Recarga automática desde fondo común" if source == "auto" else "Recarga manual detectada",
 					inline=False,
-				)
-				embed.add_field(
-					name="Recarga aplicada",
-					value=f"{reloaded_amount:,.2f}{currency_symbol}",
-					inline=True,
 				)
 				embed.add_field(
 					name="Estado",
@@ -799,17 +793,21 @@ async def notify_economy_progress_if_needed(
 
 		# Resolver ID universal del usuario, si es posible
 		global_user_id: int | None = None
+		resolved_display_name: str | None = None
 		try:
 			if platform_value == "discord" and discord_user_id:
 				lookup = find_user_by_discord_id(str(discord_user_id))
 				if lookup is not None:
 					global_user_id = int(lookup.user_id)
+					resolved_display_name = str(lookup.display_name or "").strip() or None
 			elif platform_value in {"discord", "youtube", "global"} and user_ref:
 				lookup = find_user(platform_value, str(user_ref))
 				if lookup is not None:
 					global_user_id = int(lookup.user_id)
+					resolved_display_name = str(lookup.display_name or "").strip() or None
 		except Exception:
 			global_user_id = None
+			resolved_display_name = None
 
 		id_prefix = f"`ID:{global_user_id}` " if global_user_id is not None else ""
 
@@ -826,14 +824,13 @@ async def notify_economy_progress_if_needed(
 			if mention_id is not None and mention_id > 0:
 				user_display = f"{id_prefix}<@{mention_id}>".strip()
 			else:
-				user_display = f"{id_prefix}@usuario".strip()
+				fallback_name = resolved_display_name or "usuario"
+				user_display = f"{id_prefix}@{fallback_name}".strip()
 		else:
-			# Para plataformas externas no usamos la ID de plataforma como "ID:";
-			# solo mostramos el prefijo de ID universal si se pudo resolver.
-			if global_user_id is not None:
-				user_display = f"{id_prefix}**({platform_value}:{user_ref})**".strip()
-			else:
-				user_display = f"**({platform_value}:{user_ref})**"
+			display_name = resolved_display_name or user_ref or "usuario"
+			if not str(display_name).startswith("@"):
+				display_name = f"@{display_name}"
+			user_display = f"{id_prefix}**{display_name}**".strip()
 
 		state = _load_state(guild_id)
 		user_state = _ensure_user_state(state, user_state_key)

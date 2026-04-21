@@ -3,7 +3,20 @@ Comandos de configuración de YouTube para la consola interactiva.
 """
 
 from .games import apply_youtube_game_settings
+from backend.services.discord_bot.config.economy import list_configured_economy_guild_ids
 from backend.services.youtube_api.config.economy import get_youtube_economy_config
+
+
+def _resolve_synced_discord_guild_id() -> int | None:
+	economy_config = get_youtube_economy_config()
+	source_guild_id = economy_config.get_sync_source_guild_id()
+	if source_guild_id is not None:
+		return source_guild_id
+
+	guild_ids = list_configured_economy_guild_ids()
+	if len(guild_ids) == 1:
+		return guild_ids[0]
+	return None
 
 
 async def cmd_youtube_set(ctx) -> None:
@@ -53,6 +66,12 @@ async def cmd_youtube_set(ctx) -> None:
 		return
 
 	if section == "points":
+		source_guild_id = _resolve_synced_discord_guild_id()
+		if source_guild_id is not None:
+			ctx.error("Los puntos de YouTube ahora se sincronizan desde Discord")
+			ctx.print(f"Usa /set points en la guild {source_guild_id} para cambiar amount e interval")
+			return
+
 		if len(ctx.args) != 3:
 			ctx.error("Uso: yt set points <amount> <interval_segundos>")
 			return
@@ -102,11 +121,22 @@ async def cmd_youtube_earning(ctx) -> None:
 	  yt earning false
 	"""
 	economy_config = get_youtube_economy_config()
+	source_guild_id = _resolve_synced_discord_guild_id()
 
 	if not ctx.args:
+		if source_guild_id is not None:
+			ctx.print(f"Earning de YouTube sincronizado desde Discord guild {source_guild_id}")
+			ctx.print("Usa /set earning <true|false> en Discord para cambiarlo")
+			return
+
 		status = "activado" if economy_config.is_earning_enabled() else "desactivado"
 		ctx.print(f"Earning actual: {status}")
 		ctx.print("Uso: yt earning <true|false>")
+		return
+
+	if source_guild_id is not None:
+		ctx.error("El earning de YouTube ahora se sincroniza desde Discord")
+		ctx.print(f"Usa /set earning <true|false> en la guild {source_guild_id}")
 		return
 
 	value = ctx.args[0].strip().lower()

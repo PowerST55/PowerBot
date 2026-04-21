@@ -32,6 +32,7 @@ SYSTEM_FUND_DESCRIPTIONS = {
 EARNING_FULL_FUND_COVERAGE = 20
 EARNING_HALF_FUND_COVERAGE = 8
 CASINO_BANKRUPTCY_THRESHOLD = 0.0
+CASINO_HOUSE_WIN_COMMON_FUND_TAX_RATE = 0.05
 
 
 def _round_amount(value: float | int) -> float:
@@ -761,11 +762,21 @@ def award_youtube_message_points(
 	"""Aumenta puntos por mensaje de YouTube con cooldown e idempotencia."""
 	amount = _round_amount(amount)
 	if amount <= 0 or interval_seconds < 0:
-		return {"awarded": 0, "points_added": 0.0, "global_points": None}
+		return {
+			"awarded": 0,
+			"points_added": 0.0,
+			"global_points": None,
+			"reason": "invalid_amount_or_interval",
+		}
 
 	profile = get_youtube_profile_by_channel_id(str(youtube_channel_id))
 	if not profile:
-		return {"awarded": 0, "points_added": 0.0, "global_points": None}
+		return {
+			"awarded": 0,
+			"points_added": 0.0,
+			"global_points": None,
+			"reason": "youtube_profile_not_found",
+		}
 
 	user_id = resolve_active_user_id(int(profile.user_id))
 	now = datetime.utcnow()
@@ -786,7 +797,12 @@ def award_youtube_message_points(
 			).fetchone()
 			if existing:
 				conn.rollback()
-				return {"awarded": 0, "points_added": 0.0, "global_points": None}
+				return {
+					"awarded": 0,
+					"points_added": 0.0,
+					"global_points": None,
+					"reason": "duplicate_source_event",
+				}
 
 		row = conn.execute(
 			"SELECT last_earned_at FROM earning_cooldown WHERE user_id = ? AND guild_id = ?",
@@ -800,15 +816,26 @@ def award_youtube_message_points(
 				last_earned = None
 			if last_earned and (now - last_earned).total_seconds() < interval_seconds:
 				conn.rollback()
-				return {"awarded": 0, "points_added": 0.0, "global_points": None}
+				return {
+					"awarded": 0,
+					"points_added": 0.0,
+					"global_points": None,
+					"reason": "cooldown_active",
+				}
 
+		common_fund_balance = _get_common_fund_balance_in_conn(conn, now_iso)
 		effective_amount = _calculate_dynamic_earning_amount(
 			base_amount=amount,
-			common_fund_balance=_get_common_fund_balance_in_conn(conn, now_iso),
+			common_fund_balance=common_fund_balance,
 		)
 		if effective_amount <= 0:
 			conn.rollback()
-			return {"awarded": 0, "points_added": 0.0, "global_points": None}
+			return {
+				"awarded": 0,
+				"points_added": 0.0,
+				"global_points": None,
+				"reason": "common_fund_empty" if common_fund_balance <= 0 else "effective_amount_zero",
+			}
 
 		try:
 			global_points = _transfer_common_fund_to_user(
@@ -824,7 +851,12 @@ def award_youtube_message_points(
 			)
 		except ValueError:
 			conn.rollback()
-			return {"awarded": 0, "points_added": 0.0, "global_points": None}
+			return {
+				"awarded": 0,
+				"points_added": 0.0,
+				"global_points": None,
+				"reason": "common_fund_insufficient",
+			}
 
 		if source_id:
 			conn.execute(
@@ -843,7 +875,12 @@ def award_youtube_message_points(
 		)
 
 		conn.commit()
-		return {"awarded": 1, "points_added": effective_amount, "global_points": global_points}
+		return {
+			"awarded": 1,
+			"points_added": effective_amount,
+			"global_points": global_points,
+			"reason": "awarded",
+		}
 	except Exception:
 		conn.rollback()
 		raise
@@ -1354,9 +1391,12 @@ def settle_casino_bet(
 		_ensure_platform_wallet_row(conn, resolved_user_id, "discord", now_iso)
 		_ensure_platform_wallet_row(conn, resolved_user_id, "youtube", now_iso)
 		_ensure_system_fund_row(conn, CASINO_FUND_ACCOUNT, now_iso)
+		_ensure_common_fund_row(conn, now_iso)
 
 		previous_total = _sync_wallet_total(conn, resolved_user_id, now_iso)
 		casino_balance_before = _get_system_fund_balance_in_conn(conn, CASINO_FUND_ACCOUNT, now_iso)
+		common_balance_before = _get_common_fund_balance_in_conn(conn, now_iso)
+		tax_transferred_to_common_fund = 0.0
 
 		if delta > 0:
 			new_total = _transfer_system_fund_to_user(
@@ -1386,10 +1426,47 @@ def settle_casino_bet(
 				source_id=source_id,
 				allow_negative_balance=False,
 			)
+
+			house_win_amount = _round_amount(abs(delta))
+			requested_tax = _round_amount(house_win_amount * CASINO_HOUSE_WIN_COMMON_FUND_TAX_RATE)
+			casino_balance_after_house_win = _get_system_fund_balance_in_conn(conn, CASINO_FUND_ACCOUNT, now_iso)
+			if requested_tax > 0 and casino_balance_after_house_win > 0:
+				tax_transferred_to_common_fund = _round_amount(
+					min(requested_tax, casino_balance_after_house_win)
+				)
+				if tax_transferred_to_common_fund > 0:
+					tax_source_id_root = source_id or f"{reason}:{resolved_user_id}:{now_iso}:casino_tax"
+					_debit_system_fund(
+						conn,
+						CASINO_FUND_ACCOUNT,
+						tax_transferred_to_common_fund,
+						now_iso,
+						allow_negative=False,
+						reason=f"{reason}_casino_tax",
+						counterparty_type="system_fund",
+						counterparty_id=COMMON_FUND_ACCOUNT,
+						platform="system",
+						guild_id=guild_id,
+						channel_id=channel_id,
+						source_id=f"{tax_source_id_root}:casino_tax:debit",
+					)
+					_credit_common_fund(
+						conn,
+						tax_transferred_to_common_fund,
+						now_iso,
+						reason=f"{reason}_casino_tax",
+						counterparty_type="system_fund",
+						counterparty_id=CASINO_FUND_ACCOUNT,
+						platform="system",
+						guild_id=guild_id,
+						channel_id=channel_id,
+						source_id=f"{tax_source_id_root}:casino_tax:credit",
+					)
 		else:
 			new_total = previous_total
 
 		casino_balance_after = _get_system_fund_balance_in_conn(conn, CASINO_FUND_ACCOUNT, now_iso)
+		common_balance_after = _get_common_fund_balance_in_conn(conn, now_iso)
 		conn.commit()
 
 		_enqueue_user_progress_event(
@@ -1406,6 +1483,9 @@ def settle_casino_bet(
 			"user_balance_before": _round_amount(previous_total),
 			"casino_balance_before": _round_amount(casino_balance_before),
 			"casino_balance_after": _round_amount(casino_balance_after),
+			"common_fund_balance_before": _round_amount(common_balance_before),
+			"common_fund_balance_after": _round_amount(common_balance_after),
+			"casino_tax_to_common_fund": _round_amount(tax_transferred_to_common_fund),
 			"bankruptcy_triggered": (
 				_round_amount(casino_balance_before) > CASINO_BANKRUPTCY_THRESHOLD
 				and _round_amount(casino_balance_after) <= CASINO_BANKRUPTCY_THRESHOLD

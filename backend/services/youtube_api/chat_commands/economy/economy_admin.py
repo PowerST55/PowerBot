@@ -16,6 +16,7 @@ from backend.managers.user_lookup_manager import (
 	find_user_by_youtube_channel_id,
 	find_user_by_youtube_username,
 )
+from backend.services.admin_economy_toggle import is_admin_aps_enabled
 
 from ...send_message import send_chat_message
 from ...youtube_core import YouTubeClient
@@ -39,6 +40,14 @@ async def process_admin_economy_command(
 		return False
 
 	if not (message.is_moderator or message.is_owner):
+		return True
+
+	if command in {"aps", "rps", "pewset"} and not is_admin_aps_enabled():
+		await send_chat_message(
+			client,
+			live_chat_id,
+			"APS o RPS no se encuentra disponible en este momento.",
+		)
 		return True
 
 	if len(args) < 2:
@@ -77,10 +86,7 @@ async def process_admin_economy_command(
 			await send_chat_message(
 				client,
 				live_chat_id,
-				(
-					"❌ El fondo común no tiene saldo suficiente para este APS. "
-					f"Disponible: {common_fund_balance:,.2f}. Solicitado: {amount:,.2f}."
-				),
+				"❌ El fondo común no tiene saldo suficiente para este APS en este momento.",
 			)
 			return True
 
@@ -148,10 +154,7 @@ async def process_admin_economy_command(
 				await send_chat_message(
 					client,
 					live_chat_id,
-					(
-						"❌ El fondo común no tiene saldo suficiente para este PEWSET. "
-						f"Disponible: {common_fund_balance:,.2f}. Requerido: {delta:,.2f}."
-					),
+					"❌ El fondo común no tiene saldo suficiente para este PEWSET en este momento.",
 				)
 				return True
 

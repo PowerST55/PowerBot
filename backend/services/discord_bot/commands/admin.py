@@ -8,6 +8,7 @@ from discord.ext import commands
 from backend.services.discord_bot.config import get_channels_config, get_economy_config
 from backend.services.discord_bot.config.mine_config import get_mine_config
 from backend.services.discord_bot.config.roles import get_roles_config
+from backend.services.youtube_api.config.economy import get_youtube_economy_config
 from backend.services.discord_bot.bot_logging import log_info, log_success
 
 
@@ -347,6 +348,11 @@ def setup_admin_commands(bot: commands.Bot):
             # Obtener configuración de economía y guardar
             economy_config = get_economy_config(interaction.guild.id)
             economy_config.set_points(amount, interval)
+
+            youtube_economy_config = get_youtube_economy_config()
+            youtube_economy_config.set_sync_source_guild_id(interaction.guild.id)
+            youtube_economy_config.set_points(amount, interval)
+            youtube_economy_config.set_earning_enabled(economy_config.is_earning_enabled())
             
             # Convertir segundos a minutos para mostrar
             minutes = interval / 60
@@ -379,6 +385,71 @@ def setup_admin_commands(bot: commands.Bot):
             embed = discord.Embed(
                 title="❌ Error",
                 description=f"Error al configurar puntos: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @set_group.command(name="earning", description="Activa o desactiva el earning global en Discord y YouTube")
+    @app_commands.describe(enabled="True para activar, false para desactivar")
+    async def set_earning(interaction: discord.Interaction, enabled: bool):
+        """Configura el earning global para mensajes y voz en Discord, y chat en YouTube."""
+
+        if not interaction.user.guild_permissions.administrator:
+            embed = discord.Embed(
+                title="❌ Acceso denegado",
+                description="Solo los administradores pueden usar este comando.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        try:
+            economy_config = get_economy_config(interaction.guild.id)
+            economy_config.set_earning_enabled(enabled)
+
+            youtube_economy_config = get_youtube_economy_config()
+            youtube_economy_config.set_sync_source_guild_id(interaction.guild.id)
+            youtube_economy_config.set_points(
+                economy_config.get_points_amount(),
+                economy_config.get_points_interval(),
+            )
+            youtube_economy_config.set_earning_enabled(enabled)
+
+            state_text = "activado" if enabled else "desactivado"
+            color = discord.Color.green() if enabled else discord.Color.orange()
+
+            embed = discord.Embed(
+                title="✅ Earning actualizado",
+                description=f"El earning global quedó {state_text} en Discord y YouTube.",
+                color=color,
+            )
+            embed.add_field(name="Discord mensajes", value=state_text, inline=True)
+            embed.add_field(name="Discord voz", value=state_text, inline=True)
+            embed.add_field(name="YouTube chat", value=state_text, inline=True)
+            embed.add_field(
+                name="Sincronización",
+                value=f"Guild fuente: `{interaction.guild.id}`",
+                inline=False,
+            )
+            embed.set_footer(text="YouTube usa el mismo amount e interval que Discord")
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            await log_success(
+                bot,
+                interaction.guild.id,
+                "Earning global actualizado",
+                f"{interaction.user.mention} cambió el earning global a {state_text}",
+                fields={
+                    "Estado": state_text,
+                    "Guild fuente YouTube": str(interaction.guild.id),
+                    "Configurado por": interaction.user.display_name,
+                }
+            )
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Error",
+                description=f"Error al configurar earning: {str(e)}",
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)

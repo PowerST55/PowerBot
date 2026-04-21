@@ -505,6 +505,8 @@ class PowerBotDiscord(commands.Bot):
             valid_channel_ids = [channel.id for channel in guild.text_channels] if guild else []
 
             economy = get_economy_config(guild_id)
+            if not economy.is_earning_enabled():
+                return False
             if valid_channel_ids:
                 economy.prune_deleted_earning_channels(valid_channel_ids)
 

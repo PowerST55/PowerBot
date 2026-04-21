@@ -2,5 +2,9 @@
   {
     "type": "sqlite",
     "path": "c:\\Users\\jhon-\\Desktop\\PowerBot\\backend\\data\\powerbot.db"
+  },
+  {
+    "type": "sqlite",
+    "path": "c:\\Users\\jhon-\\Downloads\\powerbot.db"
   }
 ]

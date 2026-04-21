@@ -10,6 +10,7 @@ from discord.ext import commands
 
 from backend.managers import get_or_create_discord_user, get_user_by_id
 from backend.managers import economy_manager
+from backend.services.admin_economy_toggle import is_admin_aps_enabled
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.commands.economy.user_economy import send_donation_embed
 
@@ -88,6 +89,17 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 			await _deny_permission(interaction)
 			return
 
+		if not is_admin_aps_enabled():
+			await interaction.response.send_message(
+				embed=discord.Embed(
+					title="❌ No disponible",
+					description="APS o RPS no se encuentra disponible en este momento.",
+					color=discord.Color.red(),
+				),
+				ephemeral=True,
+			)
+			return
+
 		await interaction.response.defer()
 
 		if target is None and user_id is None:
@@ -111,11 +123,7 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 		if amount > common_fund_balance:
 			await _send_error(
 				interaction,
-				(
-					f"El fondo comun no tiene saldo suficiente para este APS. "
-					f"Disponible: {common_fund_balance:.2f}{currency_symbol}. "
-					f"Solicitado: {amount:.2f}{currency_symbol}."
-				),
+				"El fondo comun no tiene saldo suficiente para este APS en este momento.",
 			)
 			return
 
@@ -156,6 +164,17 @@ def setup_admin_economy_commands(bot: commands.Bot) -> None:
 	):
 		if not interaction.user.guild_permissions.administrator:
 			await _deny_permission(interaction)
+			return
+
+		if not is_admin_aps_enabled():
+			await interaction.response.send_message(
+				embed=discord.Embed(
+					title="❌ No disponible",
+					description="APS o RPS no se encuentra disponible en este momento.",
+					color=discord.Color.red(),
+				),
+				ephemeral=True,
+			)
 			return
 
 		await interaction.response.defer()

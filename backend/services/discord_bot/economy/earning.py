@@ -19,6 +19,12 @@ def process_message_earning(
 	Processes a message and awards points if eligible.
 	"""
 	config = get_economy_config(guild_id)
+	if not config.is_earning_enabled():
+		return {
+			"awarded": 0,
+			"points_added": 0,
+			"global_points": None,
+		}
 
 	if not config.is_earning_channel(channel_id):
 		return {
@@ -61,6 +67,14 @@ def process_voice_earning_in_channel(
 	"""
 	Processes voice-call earning using the same interval/amount as chat earning.
 	"""
+	config = get_economy_config(guild_id)
+	if not config.is_earning_enabled():
+		return {
+			"awarded": 0,
+			"points_added": 0,
+			"global_points": None,
+		}
+
 	channels_config = get_channels_config(guild_id)
 	afk_voice_channel_id = channels_config.get_channel("afk_voice_channel")
 	if afk_voice_channel_id and voice_channel_id and int(afk_voice_channel_id) == int(voice_channel_id):
@@ -70,7 +84,6 @@ def process_voice_earning_in_channel(
 			"global_points": None,
 		}
 
-	config = get_economy_config(guild_id)
 	amount = config.get_points_amount()
 	interval = config.get_points_interval()
 

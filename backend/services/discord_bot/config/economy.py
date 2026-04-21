@@ -28,6 +28,9 @@ class EconomyConfig:
                 "amount": 10,               # Cantidad de puntos que da el bot
                 "interval": 300,            # Intervalo en segundos (300 = 5 min)
             },
+            "earning": {
+                "enabled": True,
+            },
             "earning_channels": []          # Canales donde se ganan puntos
         }
         
@@ -39,7 +42,25 @@ class EconomyConfig:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
-                return {**self._defaults, **loaded}
+
+                merged = self._defaults.copy()
+                merged_currency = dict(self._defaults["currency"])
+                merged_currency.update(loaded.get("currency", {}))
+                merged["currency"] = merged_currency
+
+                merged_points = dict(self._defaults["points"])
+                merged_points.update(loaded.get("points", {}))
+                merged["points"] = merged_points
+
+                merged_earning = dict(self._defaults["earning"])
+                merged_earning.update(loaded.get("earning", {}))
+                merged["earning"] = merged_earning
+
+                merged["earning_channels"] = loaded.get(
+                    "earning_channels",
+                    self._defaults["earning_channels"],
+                )
+                return merged
             except Exception as e:
                 print(f"⚠️ Error cargando economía del servidor {self.guild_id}: {e}")
                 return self._defaults.copy()
@@ -90,6 +111,16 @@ class EconomyConfig:
         """Actualiza cantidad e intervalo de puntos"""
         self._config["points"]["amount"] = amount
         self._config["points"]["interval"] = interval
+        self._save()
+
+    def is_earning_enabled(self) -> bool:
+        """Indica si el earning global está activado."""
+        return bool(self._config.get("earning", {}).get("enabled", True))
+
+    def set_earning_enabled(self, enabled: bool):
+        """Activa o desactiva earning global para mensajes y voz."""
+        self._config.setdefault("earning", {})
+        self._config["earning"]["enabled"] = bool(enabled)
         self._save()
     
     # === MÉTODOS PARA CANALES DE GANANCIAS ===
@@ -214,3 +245,17 @@ def get_economy_config(guild_id: int) -> EconomyConfig:
     if _economy_manager is None:
         _economy_manager = EconomyManager()
     return _economy_manager.get_config(guild_id)
+
+
+def list_configured_economy_guild_ids(data_dir: Path | None = None) -> list[int]:
+    """Lista guilds con archivo de economía persistido."""
+    if data_dir is None:
+        data_dir = Path(__file__).parent.parent.parent.parent / "data" / "discord_bot"
+
+    guild_ids: list[int] = []
+    for path in sorted(data_dir.glob("guild_*_economy.json")):
+        try:
+            guild_ids.append(int(path.stem.split("_")[1]))
+        except Exception:
+            continue
+    return guild_ids
