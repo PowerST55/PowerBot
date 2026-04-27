@@ -129,6 +129,9 @@ class PowerBotDiscord(commands.Bot):
         from backend.services.discord_bot.commands.games.slots import setup_slots_commands
         setup_slots_commands(self)
 
+        from backend.services.discord_bot.commands.games.aviator import setup_aviator_commands
+        setup_aviator_commands(self)
+
         from backend.services.discord_bot.commands.games.rock_paper_scissors import setup_ppt_commands
         setup_ppt_commands(self)
 

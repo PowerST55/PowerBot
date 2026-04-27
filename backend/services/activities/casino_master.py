@@ -6,7 +6,8 @@ from typing import Iterable
 
 SAFE_PAYOUT_RATIO = 0.90
 RARE_PAYOUT_RATIO = 1.10
-HEALTH_REFERENCE_MULTIPLIER = 20.0
+# Antes la economía se calibraba cerca de 2000; ahora 500 debe sentirse "alta".
+HEALTH_REFERENCE_MULTIPLIER = 5.0
 
 
 def _safe_float(value: float | int) -> float:

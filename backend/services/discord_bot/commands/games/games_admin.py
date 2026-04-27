@@ -116,6 +116,56 @@ def setup_games_admin_commands(bot: commands.Bot) -> None:
 				user=interaction.user,
 			)
 
+	@set_group.command(name="aviator", description="Configura limites y cooldown de aviator")
+	@app_commands.describe(
+		min_limit="Limite minimo por apuesta (0 = sin limite)",
+		max_limit="Limite maximo por apuesta (0 = sin limite)",
+		cooldown="Cooldown en segundos"
+	)
+	async def set_aviator(
+		interaction: discord.Interaction,
+		min_limit: float,
+		max_limit: float,
+		cooldown: int
+	):
+		if not _is_moderator(interaction):
+			await _deny_permission(interaction)
+			return
+
+		if min_limit < 0 or max_limit < 0 or cooldown < 0:
+			await _send_error(interaction, "Limites y cooldown deben ser >= 0.")
+			return
+
+		if max_limit > 0 and min_limit > max_limit:
+			await _send_error(interaction, "El limite inferior no puede ser mayor que el limite superior.")
+			return
+
+		result = games_config.set_aviator_config(min_limit, max_limit, cooldown)
+		embed = discord.Embed(
+			title="Aviator actualizado",
+			description=(
+				f"Limite inferior: {result['min_limit']}\n"
+				f"Limite superior: {result['max_limit']}\n"
+				f"Cooldown: {result['cooldown']}s"
+			),
+			color=discord.Color.green()
+		)
+		await interaction.response.send_message(embed=embed, ephemeral=True)
+
+		if interaction.guild is not None:
+			await log_economy(
+				bot,
+				interaction.guild.id,
+				"Configuración de aviator actualizada",
+				f"{interaction.user.mention} actualizó la configuración de aviator.",
+				fields={
+					"Limite inferior": str(result["min_limit"]),
+					"Limite superior": str(result["max_limit"]),
+					"Cooldown": f"{result['cooldown']}s",
+				},
+				user=interaction.user,
+			)
+
 
 def _get_or_create_set_group(bot: commands.Bot) -> app_commands.Group:
 	existing = bot.tree.get_command("set")

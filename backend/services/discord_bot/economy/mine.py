@@ -20,6 +20,11 @@ from backend.services.discord_bot.config.mine_config import get_mine_config
 from backend.services.discord_bot.economy.economy_channel import register_mine_depleted
 
 
+OLD_ECONOMY_REFERENCE = 2000.0
+NEW_ECONOMY_REFERENCE = 500.0
+MINE_VALUE_SCALE = NEW_ECONOMY_REFERENCE / OLD_ECONOMY_REFERENCE
+
+
 def _state_file(guild_id: int) -> Path:
 	data_dir = Path(__file__).resolve().parents[3] / "data" / "discord_bot"
 	return data_dir / f"guild_{guild_id}_mine_state.json"
@@ -86,6 +91,11 @@ def _calculate_mine_ip_amount(user_balance: float, ip_percent: float) -> float:
 	return round(max(0.0, float(user_balance)) * (max(0.0, float(ip_percent)) / 100.0), 2)
 
 
+def _normalize_mine_value(value: float | int) -> float:
+	"""Escala valores de mina desde economía antigua (2000) a la nueva (500)."""
+	return round(float(value) * MINE_VALUE_SCALE, 2)
+
+
 def _get_mine_fund_balance() -> float:
 	return float(economy_manager.get_mine_fund_balance())
 
@@ -95,7 +105,7 @@ def _mine_has_operable_items(items: list[dict[str, Any]], mine_fund_balance: flo
 		return False
 	for item in items:
 		probability_value = float(item.get("probability", 0) or 0)
-		price_value = float(item.get("price", 0) or 0)
+		price_value = _normalize_mine_value(float(item.get("price", 0) or 0))
 		if probability_value <= 0:
 			continue
 		if price_value > 0 and price_value > mine_fund_balance:
@@ -274,7 +284,7 @@ class MineView(discord.ui.View):
 		valid_items = []
 		for item in items:
 			probability_value = float(item.get("probability", 0) or 0)
-			price_value = float(item.get("price", 0) or 0)
+			price_value = _normalize_mine_value(float(item.get("price", 0) or 0))
 			if probability_value <= 0:
 				continue
 			if price_value > 0 and price_value > mine_fund_balance:
@@ -292,7 +302,7 @@ class MineView(discord.ui.View):
 		selected = random.choices(valid_items, weights=weights, k=1)[0]
 
 		item_name = str(selected.get("name") or "objeto")
-		reward = float(selected.get("price") or 0)
+		reward = _normalize_mine_value(float(selected.get("price") or 0))
 		probability = float(selected.get("probability") or 0)
 		item_ip_percent = float(selected.get("ip%", selected.get("ip_percent", 0.0)) or 0.0)
 		item_custom_text = str(selected.get("custom_text") or "").strip()
@@ -513,14 +523,14 @@ def _build_mine_panel_embed(guild_id: int) -> discord.Embed:
 		danger_rows = []
 		for item in mineral_items:
 			name = str(item.get("name") or "objeto")
-			price = float(item.get("price") or 0)
+			price = _normalize_mine_value(float(item.get("price") or 0))
 			prob = float(item.get("probability") or 0)
 			label = _format_currency(price, currency_symbol)
 			mineral_rows.append(f"• `{name} | {label} | {_format_probability(prob)}`")
 
 		for item in danger_items:
 			name = str(item.get("name") or "objeto")
-			price = float(item.get("price") or 0)
+			price = _normalize_mine_value(float(item.get("price") or 0))
 			prob = float(item.get("probability") or 0)
 			ip_percent = float(item.get("ip%", item.get("ip_percent", 0.0)) or 0.0)
 			label = f"-{_format_currency(abs(price), currency_symbol)}"

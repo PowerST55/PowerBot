@@ -15,6 +15,7 @@ CONFIG_FILE = DATA_DIR / "games_config.json"
 DEFAULT_CONFIG = {
 	"gamble": {"min_limit": 0.0, "max_limit": 0.0, "cooldown": 0},
 	"slots": {"min_limit": 0.0, "max_limit": 0.0, "cooldown": 0},
+	"aviator": {"min_limit": 0.0, "max_limit": 0.0, "cooldown": 0},
 }
 
 
@@ -57,6 +58,17 @@ def set_slots_config(min_limit: float, max_limit: float, cooldown: int) -> Dict[
 	return config["slots"].copy()
 
 
+def set_aviator_config(min_limit: float, max_limit: float, cooldown: int) -> Dict[str, float]:
+	config = _load_config()
+	config["aviator"] = {
+		"min_limit": float(min_limit or 0.0),
+		"max_limit": float(max_limit or 0.0),
+		"cooldown": int(cooldown),
+	}
+	_save_config(config)
+	return config["aviator"].copy()
+
+
 def get_gamble_config() -> Dict[str, float]:
 	config = _load_config().get("gamble", DEFAULT_CONFIG["gamble"]).copy()
 	# Compatibilidad con formato antiguo donde solo existia "limit"
@@ -72,6 +84,17 @@ def get_gamble_config() -> Dict[str, float]:
 def get_slots_config() -> Dict[str, float]:
 	config = _load_config().get("slots", DEFAULT_CONFIG["slots"]).copy()
 	# Compatibilidad con formato antiguo donde solo existia "limit"
+	if "limit" in config and "max_limit" not in config:
+		config["max_limit"] = float(config.pop("limit") or 0.0)
+	if "min_limit" not in config:
+		config["min_limit"] = 0.0
+	if "cooldown" not in config:
+		config["cooldown"] = 0
+	return config
+
+
+def get_aviator_config() -> Dict[str, float]:
+	config = _load_config().get("aviator", DEFAULT_CONFIG["aviator"]).copy()
 	if "limit" in config and "max_limit" not in config:
 		config["max_limit"] = float(config.pop("limit") or 0.0)
 	if "min_limit" not in config:
