@@ -85,6 +85,10 @@
             return [...new Set(values.filter(Boolean))];
         }
 
+        function sleep(ms) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+        }
+
         function normalizeStoreBasePath(path) {
             if (!path) return '';
             const normalized = normalizePath(path).replace(/\/+$/, '');
@@ -384,15 +388,9 @@
 
             await audioWarmupState.readyPromise;
 
-            // Reproducir con sincronización de video (si es que reproduce video)
+            // Reproducir siempre desde el inicio para evitar desincronizaciones.
             try {
                 audioElement.currentTime = 0;
-                
-                // Si el video ya está reproduciéndose, sincronizar tiempo
-                if (videoElement && videoElement.currentTime > 0) {
-                    audioElement.currentTime = videoElement.currentTime;
-                }
-
                 await audioElement.play();
             } catch (error) {
                 console.warn('⚠ No se pudo reproducir el sonido de notificacion:', error);
@@ -539,7 +537,15 @@
                 const videoElement = document.getElementById('notification-video');
                 const videoContainer = document.getElementById('video-container');
 
+                // Reset duro para impedir que el browser reutilice el timestamp previo.
+                videoElement.pause();
+                videoElement.removeAttribute('src');
+                videoElement.load();
+                videoElement.currentTime = 0;
+
                 videoElement.src = videoPath;
+                videoElement.preload = 'auto';
+                videoElement.load();
                 // Reproducción resiliente: autoplay sin interacción solo es estable en mute.
                 videoElement.muted = true;
                 videoElement.defaultMuted = true;
@@ -578,6 +584,12 @@
                         const duration = videoElement.duration * 1000; // convertir a ms
                         console.log(`▶ Video completamente buffered: ${notifId} (${(duration/1000).toFixed(2)}s)`);
 
+                        try {
+                            videoElement.currentTime = 0;
+                        } catch (error) {
+                            console.warn('⚠ No se pudo reiniciar currentTime antes de play:', error);
+                        }
+
                         // Fallback si el evento ended no llega
                         const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 4200;
                         fallbackTimeoutId = setTimeout(() => {
@@ -603,6 +615,11 @@
 
                     const handleLoadedMetadata = () => {
                         // Esperar a canplaythrough si es posible, pero si timea fallback a loadedmetadata
+                        try {
+                            videoElement.currentTime = 0;
+                        } catch (error) {
+                            console.warn('⚠ No se pudo reiniciar currentTime en loadedmetadata:', error);
+                        }
                         console.log(`⏳ Metadata cargado para ${notifId}, esperando buffer completo...`);
                     };
 
@@ -767,12 +784,12 @@
 
             // Permitir pruebas silenciosas (solo video) para tests de store.
             const skipSound = Boolean(data.skipSound);
+            // Reproducir video y esperar su duración real para que la cola no se pise.
+            const videoDuration = await playNotificationVideo(notifId, effectiveConfig, data);
+
             if (!skipSound) {
                 await playNotificationSound(notifId, effectiveConfig, data);
             }
-
-            // Reproducir video (al mismo tiempo que la notificación)
-            const videoDuration = await playNotificationVideo(notifId, effectiveConfig, data);
             
             // Auto-remover la notificación basado en duración del video (o 4200ms por defecto)
             if (notificationElement) {
@@ -786,20 +803,32 @@
 
         // Procesar cola de notificaciones
         async function processNotificationQueue() {
-            if (notificationQueue.length === 0) {
-                isPlayingNotification = false;
+            if (isPlayingNotification) {
                 return;
             }
 
             isPlayingNotification = true;
-            const nextNotification = notificationQueue.shift();
-            
-            console.log(`📋 Procesando notificación de la cola: ${nextNotification.notifId} (Pendientes: ${notificationQueue.length})`);
-            
-            await nuevaNotificacion(nextNotification.notifId, nextNotification.data);
-            
-            // Esperar un poco antes de procesar la siguiente
-            setTimeout(processNotificationQueue, 500);
+
+            try {
+                while (notificationQueue.length > 0) {
+                    const nextNotification = notificationQueue.shift();
+                    if (!nextNotification) {
+                        continue;
+                    }
+
+                    console.log(`📋 Procesando notificación de la cola: ${nextNotification.notifId} (Pendientes: ${notificationQueue.length})`);
+
+                    try {
+                        await nuevaNotificacion(nextNotification.notifId, nextNotification.data);
+                    } catch (error) {
+                        console.error(`❌ Error procesando notificación ${nextNotification.notifId}:`, error);
+                    }
+
+                    await sleep(220);
+                }
+            } finally {
+                isPlayingNotification = false;
+            }
         }
 
         // Manejar notificación entrante
@@ -815,22 +844,31 @@
         }
 
         // --- FUNCIONES PARA CÓDIGOS RECOMPENSABLES ---
-        function showCode(code, duration, blink_start) {
+        function showCode(code, duration, blink_start, style = {}) {
             removeCode(); // Remover código anterior si existe
             
             activeCode = code;
             console.log(`🎁 Mostrando código: ${code} (Válido por ${duration}s)`);
+
+            const safeDuration = Math.max(1, Number(duration) || 90);
+            const safeBlinkStart = Math.max(1, Math.min(Number(blink_start) || 30, safeDuration));
+            const fontSizePx = Math.max(18, Number(style.font_size_px) || 34);
+            const baseOpacity = Math.max(0.2, Math.min(Number(style.opacity) || 0.72, 1));
+            const charWidth = Math.max(16, Math.round(fontSizePx * 0.68));
+            const codeHeightPx = Math.max(28, Math.round(fontSizePx * 1.22));
             
             const container = document.getElementById('code-display');
             codeElement = document.createElement('div');
             codeElement.className = 'code-element';
             codeElement.textContent = code;
             codeElement.style.color = colors[0];
+            codeElement.style.fontSize = `${fontSizePx}px`;
+            codeElement.style.opacity = String(baseOpacity);
             container.appendChild(codeElement);
             
-            // Calcular ancho aproximado del código (44px font-size + letter-spacing)
-            const codeWidth = code.length * 30; // Aproximado: 30px por carácter
-            const codeHeight = 54; // Altura aproximada del texto
+            // Calcular ancho aproximado del código
+            const codeWidth = code.length * charWidth;
+            const codeHeight = codeHeightPx;
             
             // Posición inicial aleatoria DENTRO de los límites visibles
             const maxX = Math.max(100, window.innerWidth - codeWidth - 50);
@@ -844,7 +882,6 @@
             let speedX = (Math.random() - 0.5) * 1.2;
             let speedY = (Math.random() - 0.5) * 1.2;
             
-            let timeLeft = duration;
             let isBlinking = false;
             let colorChangeCounter = 0;
             
@@ -858,8 +895,8 @@
                 y += speedY;
                 
                 // Calcular límites dinámicos
-                const codeWidth = code.length * 30;
-                const codeHeight = 54;
+                const codeWidth = code.length * charWidth;
+                const codeHeight = codeHeightPx;
                 const minX = 20;
                 const minY = 20;
                 const maxX = window.innerWidth - codeWidth - 20;
@@ -895,13 +932,13 @@
             
             animateCode();
             
-            // Iniciar parpadeo en los últimos 30 segundos
-            const blinkStartTime = (duration - blink_start) * 1000;
+            // Iniciar parpadeo en la ventana final configurada
+            const blinkStartTime = (safeDuration - safeBlinkStart) * 1000;
             setTimeout(() => {
                 isBlinking = true;
-                console.log(`⏳ Código parpadeando... (${blink_start}s restantes)`);
+                console.log(`⏳ Código parpadeando... (${safeBlinkStart}s restantes)`);
                 codeBlinkInterval = setInterval(() => {
-                    codeElement.style.opacity = codeElement.style.opacity === '0' ? '1' : '0';
+                    codeElement.style.opacity = codeElement.style.opacity === '0.12' ? String(baseOpacity) : '0.12';
                 }, 300);
             }, blinkStartTime);
             
@@ -909,7 +946,7 @@
             codeTimeout = setTimeout(() => {
                 console.log(`❌ Código expirado: ${code}`);
                 removeCode();
-            }, duration * 1000);
+            }, safeDuration * 1000);
         }
         
         function removeCode() {
@@ -1018,7 +1055,7 @@
                     // Manejar códigos recompensables
                     if (data && data.type === 'show_code') {
                         console.log('[WS] 🎁 Código recibido:', data.code);
-                        showCode(data.code, data.duration, data.blink_start);
+                        showCode(data.code, data.duration, data.blink_start, data.style || {});
                     }
                     
                     // Código canjeado - remover de pantalla

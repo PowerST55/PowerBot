@@ -888,6 +888,107 @@ def award_youtube_message_points(
 		conn.close()
 
 
+def award_youtube_bonus_points(
+	youtube_channel_id: str,
+	chat_id: str,
+	amount: float,
+	source_id: str | None = None,
+	reason: str = "youtube_bonus",
+) -> Dict[str, Optional[float]]:
+	"""Otorga puntos exactos de bonus en YouTube sin cooldown ni reducción dinámica."""
+	amount = _round_amount(amount)
+	if amount <= 0:
+		return {
+			"awarded": 0,
+			"points_added": 0.0,
+			"global_points": None,
+			"reason": "invalid_amount",
+		}
+
+	profile = get_youtube_profile_by_channel_id(str(youtube_channel_id))
+	if not profile:
+		return {
+			"awarded": 0,
+			"points_added": 0.0,
+			"global_points": None,
+			"reason": "youtube_profile_not_found",
+		}
+
+	user_id = resolve_active_user_id(int(profile.user_id))
+	now_iso = datetime.utcnow().isoformat()
+	chat_id_text = str(chat_id)
+
+	conn = get_connection()
+	try:
+		_ensure_wallet_tables(conn)
+		_ensure_earning_events_table(conn)
+		conn.execute("BEGIN IMMEDIATE")
+
+		if source_id:
+			existing = conn.execute(
+				"SELECT 1 FROM earning_events WHERE platform = ? AND source_id = ?",
+				("youtube", source_id),
+			).fetchone()
+			if existing:
+				conn.rollback()
+				return {
+					"awarded": 0,
+					"points_added": 0.0,
+					"global_points": None,
+					"reason": "duplicate_source_event",
+				}
+
+		common_fund_balance = _get_common_fund_balance_in_conn(conn, now_iso)
+		if common_fund_balance < amount:
+			conn.rollback()
+			return {
+				"awarded": 0,
+				"points_added": 0.0,
+				"global_points": None,
+				"reason": "common_fund_insufficient",
+			}
+
+		try:
+			global_points = _transfer_common_fund_to_user(
+				conn,
+				user_id=user_id,
+				amount=amount,
+				reason=reason,
+				platform="youtube",
+				now_iso=now_iso,
+				guild_id=chat_id_text,
+				channel_id=str(youtube_channel_id),
+				source_id=source_id,
+			)
+		except ValueError:
+			conn.rollback()
+			return {
+				"awarded": 0,
+				"points_added": 0.0,
+				"global_points": None,
+				"reason": "common_fund_insufficient",
+			}
+
+		if source_id:
+			conn.execute(
+				"INSERT INTO earning_events (platform, source_id, user_id, created_at) VALUES (?, ?, ?, ?)",
+				("youtube", source_id, user_id, now_iso),
+			)
+
+		conn.commit()
+		return {
+			"awarded": 1,
+			"points_added": amount,
+			"global_points": global_points,
+			"reason": "awarded",
+		}
+	except Exception:
+		conn.rollback()
+		raise
+	finally:
+		conn.close()
+
+
 # ============================================================
 # FUNCIONES DE CONSULTA DE PUNTOS (ROBUSTAS)
 # ============================================================

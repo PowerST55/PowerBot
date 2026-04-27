@@ -19,6 +19,7 @@ from .youtube_types import YouTubeMessage
 from .youtube_user_packager import UserPackager
 from .quota_guard import mark_quota_exhausted
 from backend.managers.avatar_manager import AvatarManager
+from backend.services.activities.codes_master import start_codes_scheduler, stop_codes_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ class YouTubeListener:
         logger.error("🛑 Quota de YouTube agotada: desactivando listener automáticamente")
         self.is_running = False
         self._stop_event.set()
+        await stop_codes_scheduler()
 
         if not self._on_quota_exhausted:
             return
@@ -154,6 +156,7 @@ class YouTubeListener:
         
         self.is_running = True
         self._stop_event.clear()
+        await start_codes_scheduler(self.live_chat_id)
         self._task = asyncio.create_task(self._listen_loop())
         logger.info("YouTubeListener started")
     
@@ -168,6 +171,8 @@ class YouTubeListener:
         if self._task:
             await self._task
             self._task = None
+
+        await stop_codes_scheduler()
         
         logger.info("YouTubeListener stopped")
     
@@ -267,6 +272,7 @@ class YouTubeListener:
             logger.exception(f"🔴 CRITICAL: Exception escaped listener loop: {type(e).__name__}: {e}")
         finally:
             self.is_running = False
+            await stop_codes_scheduler()
             logger.info("Listener cleanup complete")
 
     

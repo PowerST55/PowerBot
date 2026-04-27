@@ -15,10 +15,10 @@
 .code-element {
     position: absolute;
     font-family: 'Arial Black', 'Arial', sans-serif;
-    font-size: 44px;
+    font-size: 34px;
     font-weight: 700;
     letter-spacing: 3px;
-    opacity: 0.92;
+    opacity: 0.72;
     transition: color 0.8s ease, opacity 0.5s ease;
     will-change: transform, color, opacity;
     
@@ -34,7 +34,7 @@
 /* En dispositivos móviles */
 @media (max-width: 768px) {
     .code-element {
-        font-size: 28px;
+        font-size: 24px;
         letter-spacing: 2px;
         
         /* Contorno ajustado para móvil */

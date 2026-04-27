@@ -773,6 +773,7 @@ async def cmd_youtube_help(ctx: CommandContext) -> None:
     [yellow]yt autorun[/yellow]       - Alterna/define inicio automático (true|false)
     [yellow]yt autostream[/yellow]    - Enciende/apaga YAPI automático según haya stream
     [yellow]yt stream[/yellow]        - Consulta manual de stream actual (título/URL)
+        [yellow]yt random_code[/yellow]   - Fuerza aparición de código aleatorio en pantalla
   [yellow]yt listener[/yellow]      - Inicia el listener de mensajes del chat
   [yellow]yt stop_listener[/yellow] - Detiene el listener de mensajes
   [yellow]yt logout[/yellow]        - 🚪 Cierra sesión y borra el token
@@ -796,6 +797,7 @@ async def cmd_youtube_help(ctx: CommandContext) -> None:
     [dim]yt autostream true[/dim]    - Activa detección automática de stream + YAPI
     [dim]yt autostream false[/dim]   - Desactiva detección automática
     [dim]yt stream[/dim]             - Muestra si hay stream y su título/URL
+        [dim]yt random_code[/dim]        - Publica manualmente un código random
   [dim]yt listener[/dim]           - Comienza a escuchar mensajes del chat
   [dim]yt stop_listener[/dim]      - Detiene de escuchar mensajes
   [dim]yt logout[/dim]             - Cierra sesión y requiere nueva autenticación
