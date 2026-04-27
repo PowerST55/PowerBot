@@ -16,7 +16,7 @@ from backend.managers.user_lookup_manager import (
 	find_user_by_youtube_channel_id,
 	find_user_by_youtube_username,
 )
-from backend.services.admin_economy_toggle import is_admin_aps_enabled
+from backend.services.youtube_api.config.admin_economy_toggle import is_admin_aps_enabled
 
 from ...send_message import send_chat_message
 from ...youtube_core import YouTubeClient

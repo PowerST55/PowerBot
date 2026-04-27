@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from backend.managers import get_or_create_discord_user, get_user_by_id
 from backend.managers import economy_manager
-from backend.services.admin_economy_toggle import is_admin_aps_enabled
+from backend.services.youtube_api.config.admin_economy_toggle import is_admin_aps_enabled
 from backend.services.discord_bot.config.economy import get_economy_config
 from backend.services.discord_bot.commands.economy.user_economy import send_donation_embed
 

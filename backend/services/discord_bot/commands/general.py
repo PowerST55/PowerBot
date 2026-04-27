@@ -8,6 +8,7 @@ from discord.ext import commands
 from typing import Optional
 
 from backend.managers.avatar_manager import AvatarManager
+from backend.managers import get_or_create_discord_user
 from backend.managers.user_lookup_manager import find_user_by_discord_id, find_user_by_global_id
 from backend.managers.economy_manager import get_user_balance_by_id
 from backend.managers import inventory_manager
@@ -204,6 +205,14 @@ def setup_general_commands(bot: commands.Bot) -> None:
 				return find_user_by_discord_id(target_id)
 			else:
 				return find_user_by_global_id(user_global_id)
+
+		def ensure_discord_user_registered(discord_id: str, discord_username: str, avatar_url: str) -> None:
+			"""Asegura que exista registro base en DB para usuarios de Discord consultados por /id."""
+			get_or_create_discord_user(
+				discord_id=str(discord_id),
+				discord_username=discord_username,
+				avatar_url=avatar_url,
+			)
 		
 		def get_user_info(lookup, target_obj=None):
 			"""Carga TODA la información del usuario aquí en el executor"""
@@ -324,6 +333,25 @@ def setup_general_commands(bot: commands.Bot) -> None:
 
 		# Ejecutar las operaciones síncronas en un thread para no bloquear el bot
 		loop = asyncio.get_event_loop()
+
+		# Si se consulta por usuario de Discord, crear registro automáticamente si no existe.
+		if target is not None:
+			try:
+				await loop.run_in_executor(
+					None,
+					ensure_discord_user_registered,
+					str(target.id),
+					target.name,
+					str(target.display_avatar.url),
+				)
+			except Exception as e:
+				embed = discord.Embed(
+					title="❌ Error registrando usuario",
+					description=f"No se pudo registrar el usuario en la base de datos: {str(e)}",
+					color=discord.Color.red(),
+				)
+				await interaction.followup.send(embed=embed, ephemeral=True)
+				return
 		
 		# Cargar lookup del usuario
 		lookup = await loop.run_in_executor(None, load_user_data, 

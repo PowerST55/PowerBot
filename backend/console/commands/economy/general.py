@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.managers import economy_manager
-from backend.services.admin_economy_toggle import is_admin_aps_enabled, set_admin_aps_enabled
+from backend.services.youtube_api.config.admin_economy_toggle import is_admin_aps_enabled, set_admin_aps_enabled
 
 
 def _format_amount(value: float) -> str:

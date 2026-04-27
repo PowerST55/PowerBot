@@ -27,6 +27,10 @@ class RolesConfig:
             "streamer": None,
             # Rol usado para notificaciones (ej: streams en vivo)
             "notifications": None,
+            # Roles de castigo temporal por niveles
+            "castigado_lv1": None,
+            "castigado_lv2": None,
+            "castigado_lv3": None,
         }
         
         self._config = self._load()

@@ -2,6 +2,13 @@
 Comandos de administración para PowerBot Discord.
 Solo ejecutables por administradores.
 """
+import asyncio
+import json
+import re
+import time
+from pathlib import Path
+from typing import Any
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -9,11 +16,194 @@ from backend.services.discord_bot.config import get_channels_config, get_economy
 from backend.services.discord_bot.config.mine_config import get_mine_config
 from backend.services.discord_bot.config.roles import get_roles_config
 from backend.services.youtube_api.config.economy import get_youtube_economy_config
-from backend.services.discord_bot.bot_logging import log_info, log_success
+from backend.services.discord_bot.bot_logging import log_info, log_success, log_moderation
+
+
+_TEMP_CASTIGO_FILE = Path(__file__).resolve().parents[4] / "data" / "discord_bot" / "temp_castigos.json"
+_TEMP_CASTIGO_LOCK = asyncio.Lock()
+
+
+def _to_discord_timestamp(unix_timestamp: int, style: str = "R") -> str:
+    return f"<t:{int(unix_timestamp)}:{style}>"
+
+
+def _format_duration_es(total_seconds: int) -> str:
+    seconds = int(max(0, total_seconds))
+    if seconds < 60:
+        return f"{seconds} segundo{'s' if seconds != 1 else ''}"
+
+    minutes, rem_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        if rem_seconds == 0:
+            return f"{minutes} minuto{'s' if minutes != 1 else ''}"
+        return (
+            f"{minutes} minuto{'s' if minutes != 1 else ''} "
+            f"{rem_seconds} segundo{'s' if rem_seconds != 1 else ''}"
+        )
+
+    hours, rem_minutes = divmod(minutes, 60)
+    if hours < 24:
+        if rem_minutes == 0:
+            return f"{hours} hora{'s' if hours != 1 else ''}"
+        return f"{hours} hora{'s' if hours != 1 else ''} {rem_minutes} minuto{'s' if rem_minutes != 1 else ''}"
+
+    days, rem_hours = divmod(hours, 24)
+    if rem_hours == 0:
+        return f"{days} dia{'s' if days != 1 else ''}"
+    return f"{days} dia{'s' if days != 1 else ''} {rem_hours} hora{'s' if rem_hours != 1 else ''}"
+
+
+def _parse_duration_to_seconds(raw: str) -> int | None:
+    token = str(raw).strip().lower()
+    match = re.fullmatch(r"(\d+)([smhd])?", token)
+    if not match:
+        return None
+
+    value = int(match.group(1))
+    suffix = match.group(2)
+
+    if value <= 0:
+        return None
+
+    if suffix is None or suffix == "s":
+        return value
+    if suffix == "m":
+        return value * 60
+    if suffix == "h":
+        return value * 3600
+    if suffix == "d":
+        return value * 86400
+
+    return None
+
+
+async def _load_temp_castigos() -> list[dict[str, Any]]:
+    async with _TEMP_CASTIGO_LOCK:
+        if not _TEMP_CASTIGO_FILE.exists():
+            return []
+        try:
+            with open(_TEMP_CASTIGO_FILE, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+            if isinstance(payload, dict) and isinstance(payload.get("entries"), list):
+                return payload["entries"]
+        except Exception:
+            pass
+        return []
+
+
+async def _save_temp_castigos(entries: list[dict[str, Any]]) -> None:
+    async with _TEMP_CASTIGO_LOCK:
+        _TEMP_CASTIGO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_TEMP_CASTIGO_FILE, "w", encoding="utf-8") as file:
+            json.dump({"entries": entries}, file, indent=2, ensure_ascii=False)
+
+
+async def _upsert_temp_castigo(entry: dict[str, Any]) -> None:
+    entries = await _load_temp_castigos()
+    filtered = [
+        e for e in entries
+        if not (
+            int(e.get("guild_id", 0)) == int(entry.get("guild_id", 0))
+            and int(e.get("user_id", 0)) == int(entry.get("user_id", 0))
+            and int(e.get("role_id", 0)) == int(entry.get("role_id", 0))
+        )
+    ]
+    filtered.append(entry)
+    await _save_temp_castigos(filtered)
+
+
+async def _ensure_temp_castigo_cleanup_task(bot: commands.Bot) -> None:
+    task = getattr(bot, "_temp_castigo_cleanup_task", None)
+    if task is None or task.done():
+        bot._temp_castigo_cleanup_task = asyncio.create_task(_temp_castigo_cleanup_loop(bot))
+
+
+async def _temp_castigo_cleanup_loop(bot: commands.Bot) -> None:
+    while not bot.is_closed():
+        try:
+            await _process_expired_temp_castigos(bot)
+        except Exception as exc:
+            print(f"⚠️ Error en cleanup de castigos temporales: {exc}")
+        await asyncio.sleep(5)
+
+
+async def _process_expired_temp_castigos(bot: commands.Bot) -> None:
+    entries = await _load_temp_castigos()
+    if not entries:
+        return
+
+    now_ts = int(time.time())
+    remaining: list[dict[str, Any]] = []
+
+    for entry in entries:
+        guild_id = int(entry.get("guild_id", 0) or 0)
+        user_id = int(entry.get("user_id", 0) or 0)
+        role_id = int(entry.get("role_id", 0) or 0)
+        expires_at = int(entry.get("expires_at", 0) or 0)
+        role_key = str(entry.get("role_key") or "castigo")
+        reason_text = str(entry.get("reason") or "Incumplimiento de reglas del servidor")
+        applied_by = int(entry.get("applied_by", 0) or 0)
+
+        if expires_at > now_ts:
+            remaining.append(entry)
+            continue
+
+        if guild_id <= 0 or user_id <= 0 or role_id <= 0:
+            continue
+
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            continue
+
+        role = guild.get_role(role_id)
+        if role is None:
+            continue
+
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                member = None
+
+        if member is None:
+            continue
+
+        if role not in member.roles:
+            continue
+
+        try:
+            await member.remove_roles(role, reason="Castigo temporal completado")
+            moderator_user = guild.get_member(applied_by) if applied_by > 0 else None
+            await log_moderation(
+                bot,
+                guild.id,
+                "Castigo temporal finalizado",
+                f"Se retiró automáticamente el rol temporal de {member.mention} al completarse el tiempo.",
+                fields={
+                    "Usuario": f"{member.mention} ({member.id})",
+                    "Nivel": role_key,
+                    "Rol": f"{role.name} ({role.id})",
+                    "Motivo": reason_text,
+                    "Expiró": _to_discord_timestamp(expires_at, "R"),
+                },
+                user=member,
+                moderator=moderator_user,
+            )
+        except Exception:
+            # Si falla, lo mantenemos para reintentar en el próximo ciclo
+            remaining.append(entry)
+
+    await _save_temp_castigos(remaining)
 
 
 def setup_admin_commands(bot: commands.Bot):
     """Registra comandos de administración"""
+
+    try:
+        asyncio.create_task(_ensure_temp_castigo_cleanup_task(bot))
+    except RuntimeError:
+        pass
 
     admin_group = app_commands.Group(name="admin", description="Comandos administrativos")
 
@@ -613,6 +803,9 @@ def setup_admin_commands(bot: commands.Bot):
         app_commands.Choice(name="MOD", value="mod"),
         app_commands.Choice(name="Streamer", value="streamer"),
         app_commands.Choice(name="Notificaciones", value="notifications"),
+        app_commands.Choice(name="CastigadoLv1", value="castigado_lv1"),
+        app_commands.Choice(name="CastigadoLv2", value="castigado_lv2"),
+        app_commands.Choice(name="CastigadoLv3", value="castigado_lv3"),
     ])
     async def set_role(interaction: discord.Interaction, tipo: app_commands.Choice[str], rol: discord.Role):
         """Configura roles del servidor - Solo administradores"""
@@ -637,6 +830,9 @@ def setup_admin_commands(bot: commands.Bot):
                 "mod": "MOD",
                 "streamer": "Streamer",
                 "notifications": "Notificaciones",
+                "castigado_lv1": "CastigadoLv1",
+                "castigado_lv2": "CastigadoLv2",
+                "castigado_lv3": "CastigadoLv3",
             }
             
             # Manejo diferenciado: DJ (único), MOD (múltiple), streamer/notifications (único)
@@ -710,6 +906,19 @@ def setup_admin_commands(bot: commands.Bot):
                 embed.add_field(name="ID", value=f"`{rol.id}`", inline=True)
                 embed.set_footer(text="Guardado en data/discord_bot/")
 
+            elif tipo.value in {"castigado_lv1", "castigado_lv2", "castigado_lv3"}:
+                roles_config.set_role(tipo.value, rol.id)
+
+                embed = discord.Embed(
+                    title="✅ Rol de castigo configurado",
+                    description="Rol de castigo temporal configurado correctamente",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="Tipo", value=f"`{tipo_nombre.get(tipo.value)}`", inline=True)
+                embed.add_field(name="Rol", value=rol.mention, inline=True)
+                embed.add_field(name="ID", value=f"`{rol.id}`", inline=True)
+                embed.set_footer(text="Guardado en data/discord_bot/")
+
             else:
                 embed = discord.Embed(
                     title="❌ Error",
@@ -727,6 +936,149 @@ def setup_admin_commands(bot: commands.Bot):
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="castigar", description="Añade un rol de castigo temporal (Lv1/Lv2/Lv3)")
+    @app_commands.describe(
+        target="Usuario a castigar",
+        nivel="Nivel del castigo a aplicar",
+        tiempo="Duración (ej: 200, 13s, 1m, 5m, 7h, 2d)",
+        motivo="Motivo opcional del castigo",
+    )
+    @app_commands.choices(nivel=[
+        app_commands.Choice(name="Lv1", value="castigado_lv1"),
+        app_commands.Choice(name="Lv2", value="castigado_lv2"),
+        app_commands.Choice(name="Lv3", value="castigado_lv3"),
+    ])
+    async def castigar(
+        interaction: discord.Interaction,
+        target: discord.Member,
+        nivel: app_commands.Choice[str],
+        tiempo: str,
+        motivo: str | None = None,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message("Este comando solo se puede usar en servidor.", ephemeral=True)
+            return
+
+        if not interaction.user.guild_permissions.administrator:
+            embed = discord.Embed(
+                title="❌ Acceso denegado",
+                description="Solo los administradores pueden usar este comando.",
+                color=discord.Color.red(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        duration_seconds = _parse_duration_to_seconds(tiempo)
+        if duration_seconds is None:
+            await interaction.response.send_message(
+                "Tiempo inválido. Usa segundos puros o sufijo s/m/h/d (ej: 200, 13s, 1m, 7h, 2d).",
+                ephemeral=True,
+            )
+            return
+
+        await _ensure_temp_castigo_cleanup_task(bot)
+
+        roles_config = get_roles_config(interaction.guild.id)
+        role_id = roles_config.get_role(nivel.value)
+        if not role_id:
+            await interaction.response.send_message(
+                f"No hay rol configurado para {nivel.name}. Configúralo con /set role.",
+                ephemeral=True,
+            )
+            return
+
+        role = interaction.guild.get_role(int(role_id))
+        if role is None:
+            await interaction.response.send_message(
+                f"El rol configurado para {nivel.name} ya no existe. Vuelve a configurarlo con /set role.",
+                ephemeral=True,
+            )
+            return
+
+        if target.bot:
+            await interaction.response.send_message("No puedes castigar bots.", ephemeral=True)
+            return
+
+        now_ts = int(time.time())
+        expires_at = now_ts + int(duration_seconds)
+        safe_reason = (motivo or "Incumplimiento de reglas del servidor").strip()
+
+        try:
+            await target.add_roles(role, reason=f"Castigo temporal ({nivel.name}) por {interaction.user}")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "No tengo permisos para asignar ese rol. Revisa la jerarquía de roles.",
+                ephemeral=True,
+            )
+            return
+        except Exception as e:
+            await interaction.response.send_message(f"Error al asignar el rol: {e}", ephemeral=True)
+            return
+
+        await _upsert_temp_castigo(
+            {
+                "guild_id": int(interaction.guild.id),
+                "user_id": int(target.id),
+                "role_id": int(role.id),
+                "role_key": str(nivel.value),
+                "expires_at": int(expires_at),
+                "reason": safe_reason,
+                "applied_by": int(interaction.user.id),
+                "created_at": int(now_ts),
+            }
+        )
+
+        dm_embed = discord.Embed(
+            title="⚠️ Has sido castigado por la moderación",
+            description=(
+                f"Has recibido una sanción temporal ({nivel.name}) en **{interaction.guild.name}**.\n"
+                f"Motivo: **{safe_reason}**"
+            ),
+            color=discord.Color.orange(),
+        )
+        dm_embed.add_field(name="Duración", value=f"{_format_duration_es(duration_seconds)}", inline=True)
+        dm_embed.add_field(name="Finaliza", value=f"{_to_discord_timestamp(expires_at, 'R')}", inline=True)
+        dm_embed.add_field(name="Fecha exacta", value=f"{_to_discord_timestamp(expires_at, 'F')}", inline=False)
+        dm_embed.set_footer(
+            text="Recuerda seguir las reglas del servidor o tu sanción podría ser mayor"
+        )
+
+        dm_sent = True
+        try:
+            await target.send(embed=dm_embed)
+        except Exception:
+            dm_sent = False
+
+        response_embed = discord.Embed(
+            title="✅ Castigo aplicado",
+            description=f"Se aplicó **{nivel.name}** a {target.mention}",
+            color=discord.Color.green(),
+        )
+        response_embed.add_field(name="Duración", value=f"{_format_duration_es(duration_seconds)}", inline=True)
+        response_embed.add_field(name="Termina", value=f"{_to_discord_timestamp(expires_at, 'R')}", inline=True)
+        response_embed.add_field(name="Razón", value=safe_reason, inline=False)
+        response_embed.add_field(name="DM enviado", value="Sí" if dm_sent else "No", inline=True)
+
+        await interaction.response.send_message(embed=response_embed, ephemeral=True)
+
+        await log_moderation(
+            bot,
+            interaction.guild.id,
+            "Castigo temporal aplicado",
+            f"{interaction.user.mention} aplicó {nivel.name} a {target.mention}.",
+            fields={
+                "Usuario": f"{target.mention} ({target.id})",
+                "Nivel": nivel.name,
+                "Rol": f"{role.name} ({role.id})",
+                "Duración": _format_duration_es(duration_seconds),
+                "Finaliza": _to_discord_timestamp(expires_at, "R"),
+                "Motivo": safe_reason,
+                "DM enviado": "Sí" if dm_sent else "No",
+            },
+            user=target,
+            moderator=interaction.user,
+        )
     
     bot.tree.add_command(set_group)
     bot.tree.add_command(admin_group)
